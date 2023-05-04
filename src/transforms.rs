@@ -130,8 +130,14 @@ impl Transform for Conv1d {
         //  where bufpart = buf_padded[i : i+k*c] -> step_by(2)
         for ia in 0..n {
             let ib = ia + k * (numch as usize) - 1;
-            let bufpart = buf_padded[ia..ib].iter().step_by(numch as usize);
-            let res: Float = self.kernel.iter().zip(bufpart).map(|(k,x)| k*x).sum();
+            let bufpart = buf_padded[ia..ib]
+                .iter()
+                .step_by(numch as usize);
+            let res: Float = self.kernel
+                .iter().rev()
+                .zip(bufpart)
+                .map(|(k,x)| k*x)
+                .sum();
             output.push(res as Int);
         }
 
