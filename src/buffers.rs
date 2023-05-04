@@ -77,9 +77,7 @@ impl<S> SampleBuffer<S> {
 }
 
 
-/* 
- * write_buffer: helper fn for writing a chunk to a WavWriter
- */
+// write_buffer: helper fn for writing a chunk to a WavWriter
 pub fn write_buffer<W:Write+Seek, S:Sample+Copy>(writer: &mut WavWriter<W>, buf: &Vec<S>) {
     for s in buf.iter() {
         writer.write_sample(s.clone()).expect("failed to write buffer");

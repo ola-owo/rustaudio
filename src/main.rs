@@ -54,12 +54,13 @@ fn main() {
     // read & write remaining buffers
     // let amp_quieter = transforms::Amp::from_db(-10.0);
     // let trifilt = transforms::Conv1d::new(Vec::from(TRIANGLE_19));
-    let fc = 1000.0; // cutoff freq in hz
+    let fc = 5000.0; // cutoff freq in hz
     let wc = TAU * fc / (wavspec.sample_rate as f64);
-    let lowpass = transforms::Conv1d::sinc_lowpass(60, wc);
+    let mut lowpass = transforms::Conv1d::sinc(60, wc);
     for mut buf in sample_buffer {
         // amp_quieter.transform(&mut buf);
         lowpass.transform(&mut buf);
         write_buffer(&mut writer, buf.data());
     }
+    lowpass.clear_memory();
 }
