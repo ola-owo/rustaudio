@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 #symphonia = "0.5.2"
 #fundsp = "0.13.0"
-num-traits = "0.2.15"
 hound = "3.5.0"
 #itertools = "0.8.2"
+num = "0.4.0"
+rustfft = "6.1.0"

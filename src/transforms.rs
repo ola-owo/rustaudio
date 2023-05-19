@@ -1,5 +1,9 @@
-//use itertools::{Interleave,interleave};
-use std::f64::consts::*;
+// std lib imports
+use std::{f64::consts::*};
+use std::ops::Rem;
+// external crates
+use rustfft::{FftPlanner, num_complex::Complex};
+// local crates
 use crate::buffers::SampleBuffer;
 
 type Float = f64;
@@ -11,12 +15,16 @@ pub trait Transform {
     fn transform(&mut self, buf: &mut SampleBuffer<Int>);
 }
 
+/*
+Amp: Increase or decrease gain, that's it.
+*/
 pub struct Amp {
     // here, gain is a multiplier
     // dB change = 20 * log10(gain)
     gain: Float
 }
 
+#[allow(dead_code)]
 impl Amp {
     pub fn new(gain: Float) -> Self {
         Self {gain}
@@ -46,11 +54,16 @@ impl Transform for Amp {
     }
 }
 
+/*
+Conv1d: Convolve signal with a kernel.
+Can be used for filtering, reverb, whatever.
+*/
 pub struct Conv1d {
     kernel: Vec<Float>,
     lastchunk: Vec<Float>
 }
 
+#[allow(dead_code)]
 impl Conv1d {
     // create a filter using a custom convolution kernel
     pub fn new(kernel: Vec<Float>) -> Self {
