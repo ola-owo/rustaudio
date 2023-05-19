@@ -167,3 +167,19 @@ impl Transform for Conv1d {
         *data = output;
     }
 }
+
+
+/*
+ToMono: average all signals together
+*/
+pub struct ToMono;
+
+impl Transform for ToMono {
+    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+        let numch = buf.channels();
+        let data = buf.data_mut();
+        *data = data.chunks(numch as usize)
+            .map(|x| x.iter().sum())
+            .collect();
+    }
+}
