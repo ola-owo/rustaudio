@@ -112,6 +112,76 @@ impl Conv1d {
         Self {kernel, lastchunk: vec![]}
     }
 
+    /*
+    Create digital butterworth filter,
+    using a bilinear transform,
+        W_cont = 2 * fs * tan(w_disc / 2)
+    then sampling the freq response,
+    then an IFFT.
+
+    n   digital filter order
+    wc  cutoff freq (rad/s)
+    ord butterworth filter order
+    fs  sample rate (hz)
+    */
+    pub fn butterworth(n: usize, wc: Float, ord: u32, fs: Float) -> Self {
+        const OVERSAMPLE_FACTOR: usize = 15;
+
+        // TODO: modify freqfn to use filter order (ord)
+        // let coeff = Complex::new(0.0, 2.0 * fs / wc);
+        // let freqfn =  |w: Float| (1.0 + coeff * (w / wc * 0.5).tan()).inv();
+        let coeff1 = Complex::new(0.0, 2.0 * fs);
+        let coeff2 = 0.5 / (wc*fs);
+        let freqfn = |w: Float| (1.0 + coeff1 * (coeff2 * w).tan()).inv();
+
+        // sample the freq response
+        let nsamp = OVERSAMPLE_FACTOR * n;
+        let nsamp_step = (nsamp as Float).recip() * TAU;
+        let i2w = |x: usize| {
+            /*
+            original range: [0, nsamp)
+            a = x * stepsz: [0, PI)
+            b = a + PI:     [PI, 3PI)
+            c = b % 2PI:    [PI, 2PI) + [0, PI)
+            d = c - PI:     [0, PI) + [-PI, 0)
+            */
+            ((x as Float * nsamp_step) + PI).rem(TAU) - PI
+        };
+        let wvals: Vec<Float> = (0..nsamp)
+            .map(i2w)
+            .collect();
+        // let fvals: Vec<Float> = wvals.iter()
+        //     .map(|&w| 2.0 * fs * (w/2.0).tan())
+        //     .collect();
+        // let mut hvals: Vec<Complex<Float>> = fvals.into_iter()
+        let mut hvals: Vec<Complex<Float>> = wvals.into_iter()
+            .map(freqfn)
+            .collect();
+        let hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
+        let hvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
+
+        // inverse fft
+        let mut fft_plan = FftPlanner::new();
+        let ifft = fft_plan.plan_fft_inverse(nsamp as usize);
+        ifft.process(&mut hvals);
+
+        // resample ifft to n points and discard nonreal parts
+        // also normalize ifft output: scale by 1/len().sqrt()
+        let fft_scalar = (hvals.len() as Float).sqrt().recip();
+        let kernel: Vec<Float> = hvals.iter()
+            .step_by(OVERSAMPLE_FACTOR)
+            .map(|&x| x.re * fft_scalar)
+            .collect();
+
+        // normalize so that sum(kernel) = 1
+        // let ksum_inv = kernel.iter().sum::<Float>().recip();
+        // kernel = kernel.iter()
+        //     .map(|&x| x * ksum_inv)
+        //     .collect();
+
+        Self {kernel, lastchunk: vec![]}
+    }
+
     // clear cached last chunk
     pub fn clear_memory(&mut self) {
         self.lastchunk = vec![];

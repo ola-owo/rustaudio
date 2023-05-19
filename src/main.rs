@@ -7,11 +7,9 @@ use hound::{WavReader,WavWriter};
 use buffers::{ChunkedSampler,write_buffer};
 use transforms::Transform;
 
-// use crate::transforms::Transform;
-
 const WAVFILE: &str = "./data/maggi.wav";
-const WAV_OUTPUT: &str = "./data/maggi_new.wav";
-const BUFFER_CAP: usize = 512;
+const WAV_OUTPUT: &str = "./data/maggi-new.wav";
+const BUFFER_CAP: usize = 1024;
 
 fn main() {
     // initialize reader
@@ -19,12 +17,12 @@ fn main() {
     let mut wav_reader =  WavReader::open(path)
         .expect("couldn't open file");
     let wavspec = wav_reader.spec();
-    let sample_format = match wavspec.sample_format {
+    let sample_format_str = match wavspec.sample_format {
         hound::SampleFormat::Float => "float",
         hound::SampleFormat::Int => "int"
     };
     println!("WAV spec:\n> channels: {}\n> fs: {}\n> bit depth: {}\n> dtype: {}", 
-        wavspec.channels, wavspec.sample_rate, wavspec.bits_per_sample, sample_format);
+        wavspec.channels, wavspec.sample_rate, wavspec.bits_per_sample, sample_format_str);
     let mut sample_iter = wav_reader.samples::<i16>();
     let mut sample_buffer = ChunkedSampler::new(
         &mut sample_iter,
@@ -42,7 +40,7 @@ fn main() {
     let buf = sample_buffer.next().expect("couldn't load buffer");
     let data = buf.data();
     let rms = data.iter()
-        .fold(0.0, |acc,x| acc + (*x as f64).powi(2))
+        .fold(0.0, |acc, &x| acc + x.pow(2) as f64)
         .sqrt();
     let bufmin = data.iter().min().unwrap();
     let bufmax = data.iter().max().unwrap();
@@ -54,9 +52,12 @@ fn main() {
     // read & write remaining buffers
     // let amp_quieter = transforms::Amp::from_db(-10.0);
     // let trifilt = transforms::Conv1d::new(Vec::from(TRIANGLE_19));
-    let fc = 5000.0; // cutoff freq in hz
-    let wc = TAU * fc / (wavspec.sample_rate as f64);
-    let mut lowpass = transforms::Conv1d::sinc(60, wc);
+    let fs = wavspec.sample_rate as f64;
+    let fc = 1000.0; // cutoff freq in hz
+    let wc = fc * TAU / fs;
+    let ws = fs * TAU;
+    // let mut lowpass = transforms::Conv1d::sinc(60, wc);
+    let mut lowpass = transforms::Conv1d::butterworth(60, wc, 1, fs);
     for mut buf in sample_buffer {
         // amp_quieter.transform(&mut buf);
         lowpass.transform(&mut buf);
