@@ -3,14 +3,19 @@ use std::{f64::consts::*};
 use std::ops::Rem;
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
+use num_traits::{Num, AsPrimitive};
+use num_traits::identities::zero;
 // local crates
 use crate::buffers::SampleBuffer;
 
 type Float = f64;
 type Int = i16; // default sample data type
+type CFloat = Complex<Float>;
 
-// Transform an audio buffer
-// filter, pan, gain, whatever
+/*
+Transform an audio buffer
+filter, pan, gain, whatever
+*/
 pub trait Transform {
     fn transform(&mut self, buf: &mut SampleBuffer<Int>);
 }
@@ -124,7 +129,7 @@ impl Conv1d {
     ord butterworth filter order
     fs  sample rate (hz)
     */
-    pub fn butterworth(n: usize, wc: Float, ord: u32, fs: Float) -> Self {
+    pub fn butterworth_1(n: usize, wc: Float, ord: u32, fs: Float) -> Self {
         const OVERSAMPLE_FACTOR: usize = 15;
 
         // TODO: modify freqfn to use filter order (ord)
@@ -153,12 +158,12 @@ impl Conv1d {
         // let fvals: Vec<Float> = wvals.iter()
         //     .map(|&w| 2.0 * fs * (w/2.0).tan())
         //     .collect();
-        // let mut hvals: Vec<Complex<Float>> = fvals.into_iter()
-        let mut hvals: Vec<Complex<Float>> = wvals.into_iter()
+        // let mut hvals: Vec<CFloat> = fvals.into_iter()
+        let mut hvals: Vec<CFloat> = wvals.into_iter()
             .map(freqfn)
             .collect();
-        let hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
-        let hvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
+        // let hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
+        // let hvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
 
         // inverse fft
         let mut fft_plan = FftPlanner::new();
@@ -182,6 +187,108 @@ impl Conv1d {
         Self {kernel, lastchunk: vec![]}
     }
 
+    /*
+    Any-order Butterworth
+    */
+    pub fn butterworth(n: usize, fc: Float, ord: u32, fs: Float) -> Self {
+        const OVERSAMPLE_FACTOR: usize = 15;
+
+        // Compute butter poles
+        // should have mag wc but normalizing to unit length
+        let ordf = ord as Float;
+        let odd_ord = ord % 2 == 1;
+        let poles = match odd_ord {
+            // poles are ordered ccw from j to -j axis
+            // odd order: include -1
+            true => {
+                let i0 = (ord as i32 - 1) / 2;
+                (-i0 ..= i0)
+                .map(|i| Complex::from_polar(
+                    1.0,
+                    PI * ((ord as i32 + i) as Float / ordf)
+                ))
+                .collect::<Vec<CFloat>>()
+            },
+            false => {
+                let i0 = (ord as i32) / 2;
+                (-i0 ..= i0-1)
+                .map(|i| Complex::from_polar(
+                    1.0,
+                    PI * (1.0 + (ordf.recip() * (0.5 + i as Float)))
+                ))
+                .collect::<Vec<CFloat>>()
+            }
+        };
+        println!("POLES: {:?}", &poles);
+
+        // get poles in upper left quadrant (Re<0, Im>0) -- EXCLUDING p=-1
+        let poles_upper = Vec::from(&poles[..(ord as usize)/2]);
+        println!("UPPER POLES: {:?}", &poles_upper);
+
+        // build freq response from upper-quadrant poles
+        let freqfn = |fnorm: Float| {
+            // get freq resp component from each pole
+            let f = poles_upper.iter()
+                .map(|p| Complex::new(1.0 - fnorm.powi(2), -2.0 * fnorm * p.re))
+                .product::<CFloat>()
+                .inv();
+            // if odd order, include p=-1 component
+            match odd_ord {
+                false => f,
+                true => f * Complex::new(1.0, fnorm).inv()
+            }
+        };
+
+        // sample the freq response
+        let nsamp = OVERSAMPLE_FACTOR * n;
+        let nsamp_step = (nsamp as Float).recip() * TAU;
+        let i2w = |x: usize| {
+            /*
+            original range: [0, nsamp)
+            a = x * stepsz: [0, PI)
+            b = a + PI:     [PI, 3PI)
+            c = b % 2PI:    [PI, 2PI) + [0, PI)
+            d = c - PI:     [0, PI) + [-PI, 0)
+            */
+            ((x as Float * nsamp_step) + PI).rem(TAU) - PI
+        };
+        let wvals: Vec<Float> = (0..nsamp)
+            .map(i2w)
+            .collect();
+        let fvals: Vec<Float> = wvals.iter()
+            .map(|&w| 2.0 * fs * (w/2.0).tan())
+            .collect();        
+        let fvals_norm: Vec<Float> = fvals.iter()
+            .map(|&f| f / fc)
+            .collect();
+        let mut hvals: Vec<CFloat> = fvals_norm.into_iter()
+            .map(freqfn)
+            .collect();
+        // let hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
+        // let hvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
+
+        // inverse fft
+        let mut fft_plan = FftPlanner::new();
+        let ifft = fft_plan.plan_fft_inverse(nsamp as usize);
+        ifft.process(&mut hvals);
+
+        // resample ifft to n points and discard nonreal parts
+        // also normalize ifft output: scale by 1/len().sqrt()
+        let fft_scalar = (hvals.len() as Float).sqrt().recip();
+        let kernel: Vec<Float> = hvals.iter()
+            .step_by(OVERSAMPLE_FACTOR)
+            .map(|&x| x.re * fft_scalar)
+            .collect();
+
+        // normalize so that sum(kernel) = 1
+        // let ksum_inv = kernel.iter().sum::<Float>().recip();
+        // kernel = kernel.iter()
+        //     .map(|&x| x * ksum_inv)
+        //     .collect();
+
+        Self {kernel, lastchunk: vec![]}
+    }
+ 
     // clear cached last chunk
     pub fn clear_memory(&mut self) {
         self.lastchunk = vec![];
@@ -252,4 +359,15 @@ impl Transform for ToMono {
             .map(|x| x.iter().sum())
             .collect();
     }
+}
+
+fn energy<T:Num+Copy>(vec: &Vec<T>) -> T {
+    vec
+        .iter()
+        .fold(zero::<T>(), |acc, &x| acc + x*x)
+}
+
+fn rms<T:Num+AsPrimitive<R>, R:'static+num_traits::Float>(vec: &Vec<T>) -> R {
+    let e = energy(vec).as_();
+    e.sqrt()
 }

@@ -55,9 +55,9 @@ fn main() {
     let fs = wavspec.sample_rate as f64;
     let fc = 1000.0; // cutoff freq in hz
     let wc = fc * TAU / fs;
-    let ws = fs * TAU;
+    //let ws = fs * TAU;
     // let mut lowpass = transforms::Conv1d::sinc(60, wc);
-    let mut lowpass = transforms::Conv1d::butterworth(60, wc, 1, fs);
+    let mut lowpass = transforms::Conv1d::butterworth(60, wc, 2, fs);
     for mut buf in sample_buffer {
         // amp_quieter.transform(&mut buf);
         lowpass.transform(&mut buf);
