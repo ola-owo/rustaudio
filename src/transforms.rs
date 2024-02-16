@@ -1,5 +1,5 @@
 // std lib imports
-use std::{f64::consts::*};
+use std::f64::consts::*;
 use std::ops::Rem;
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
@@ -20,8 +20,47 @@ pub trait Transform {
     fn transform(&mut self, buf: &mut SampleBuffer<Int>);
 }
 
+// Dummy transform that does nothing
+pub struct PassThrough;
+
+impl Transform for PassThrough {
+    fn transform(&mut self, _buf: &mut SampleBuffer<Int>) {}
+}
+
+// Chain multiple transforms together
+pub struct Chain {
+    chain: Vec<Box<dyn Transform>>,
+    length: usize
+}
+
+impl Chain {
+    pub fn new(tf: impl Transform + 'static) -> Self {
+        Self {chain: vec![Box::new(tf)], length: 1}
+    }
+
+    // 'static bound requires input [tf] to be an owned type,
+    // which all Transform implementations are
+    pub fn push(mut self, tf: impl Transform + 'static) -> Self {
+        self.chain.push(Box::new(tf));
+        self.length += 1;
+        self
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+}
+
+impl Transform for Chain {
+    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+        for tf_box in self.chain.iter_mut() {
+            tf_box.transform(buf);
+        }
+    }
+}
+
 /*
-Amp: Increase or decrease gain, that's it.
+Amp: scale signal up or down.
 */
 pub struct Amp {
     // here, gain is a multiplier
@@ -75,7 +114,7 @@ impl Conv1d {
         Self {kernel, lastchunk: vec![]}
     }
 
-    // create a triangular widow filter
+    // create a triangular window filter
     pub fn triangle_win(n: usize) -> Self {
         let mut kernel = Vec::<Float>::with_capacity(n);
         let nhalf = n / 2;
@@ -124,77 +163,18 @@ impl Conv1d {
     then sampling the freq response,
     then an IFFT.
 
-    n   digital filter order
-    wc  cutoff freq (rad/s)
-    ord butterworth filter order
+    n   digital filter kernel length
+    fc  cutoff freq (hz)
+    ord analog filter order
     fs  sample rate (hz)
-    */
-    pub fn butterworth_1(n: usize, wc: Float, ord: u32, fs: Float) -> Self {
-        const OVERSAMPLE_FACTOR: usize = 15;
-
-        // TODO: modify freqfn to use filter order (ord)
-        // let coeff = Complex::new(0.0, 2.0 * fs / wc);
-        // let freqfn =  |w: Float| (1.0 + coeff * (w / wc * 0.5).tan()).inv();
-        let coeff1 = Complex::new(0.0, 2.0 * fs);
-        let coeff2 = 0.5 / (wc*fs);
-        let freqfn = |w: Float| (1.0 + coeff1 * (coeff2 * w).tan()).inv();
-
-        // sample the freq response
-        let nsamp = OVERSAMPLE_FACTOR * n;
-        let nsamp_step = (nsamp as Float).recip() * TAU;
-        let i2w = |x: usize| {
-            /*
-            original range: [0, nsamp)
-            a = x * stepsz: [0, PI)
-            b = a + PI:     [PI, 3PI)
-            c = b % 2PI:    [PI, 2PI) + [0, PI)
-            d = c - PI:     [0, PI) + [-PI, 0)
-            */
-            ((x as Float * nsamp_step) + PI).rem(TAU) - PI
-        };
-        let wvals: Vec<Float> = (0..nsamp)
-            .map(i2w)
-            .collect();
-        // let fvals: Vec<Float> = wvals.iter()
-        //     .map(|&w| 2.0 * fs * (w/2.0).tan())
-        //     .collect();
-        // let mut hvals: Vec<CFloat> = fvals.into_iter()
-        let mut hvals: Vec<CFloat> = wvals.into_iter()
-            .map(freqfn)
-            .collect();
-        // let hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
-        // let hvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
-
-        // inverse fft
-        let mut fft_plan = FftPlanner::new();
-        let ifft = fft_plan.plan_fft_inverse(nsamp as usize);
-        ifft.process(&mut hvals);
-
-        // resample ifft to n points and discard nonreal parts
-        // also normalize ifft output: scale by 1/len().sqrt()
-        let fft_scalar = (hvals.len() as Float).sqrt().recip();
-        let kernel: Vec<Float> = hvals.iter()
-            .step_by(OVERSAMPLE_FACTOR)
-            .map(|&x| x.re * fft_scalar)
-            .collect();
-
-        // normalize so that sum(kernel) = 1
-        // let ksum_inv = kernel.iter().sum::<Float>().recip();
-        // kernel = kernel.iter()
-        //     .map(|&x| x * ksum_inv)
-        //     .collect();
-
-        Self {kernel, lastchunk: vec![]}
-    }
-
-    /*
-    Any-order Butterworth
     */
     pub fn butterworth(n: usize, fc: Float, ord: u32, fs: Float) -> Self {
         const OVERSAMPLE_FACTOR: usize = 15;
+        let wc = TAU * fc; // cutoff freq in rad/s
+        let ts = fs.recip(); // sample period in s
 
         // Compute butter poles
-        // should have mag wc but normalizing to unit length
+        // pole magnitude is actually wc, but we're normalizing to unit length
         let ordf = ord as Float;
         let odd_ord = ord % 2 == 1;
         let poles = match odd_ord {
@@ -300,9 +280,8 @@ impl Transform for Conv1d {
     // apply (causal) filter to buffer,
     // this will delay signal by k-1 samples
     fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
-        /* note: multi-channel vectors are interleaved:
-         * e.g. [left, right, left, right, ...]
-         */
+        // note: multi-channel vectors are interleaved:
+        // [left, right, left, right, ...]
         let numch = buf.channels();
         let data = buf.data_mut();
         let k = self.kernel.len();
@@ -361,12 +340,14 @@ impl Transform for ToMono {
     }
 }
 
+#[allow(dead_code)]
 fn energy<T:Num+Copy>(vec: &Vec<T>) -> T {
     vec
         .iter()
         .fold(zero::<T>(), |acc, &x| acc + x*x)
 }
 
+#[allow(dead_code)]
 fn rms<T:Num+AsPrimitive<R>, R:'static+num_traits::Float>(vec: &Vec<T>) -> R {
     let e = energy(vec).as_();
     e.sqrt()
