@@ -199,53 +199,74 @@ impl Conv1d {
                 .collect::<Vec<CFloat>>()
             }
         };
-        println!("POLES: {:?}", &poles);
+        for (i, pole) in poles.iter().enumerate() {
+            println!("POLE {}: {:?}", i, pole);
+        }
+
+        // bilinear transform poles from s to z space
+        // let kwarp = wc / (0.5 * wc / fs).tan(); // freq warp centered at wc
+        let kwarp = (wc * ts * 0.5).tan().recip();
+        let poles_bilin = poles.iter()
+            .map(|&p| (kwarp + p) / (kwarp - p))
+            .collect::<Vec<CFloat>>();
+        for (i, pole) in poles_bilin.iter().enumerate() {
+            println!("POLE {} (prewarped): {:?}", i, pole);
+        }
 
         // get poles in upper left quadrant (Re<0, Im>0) -- EXCLUDING p=-1
-        let poles_upper = Vec::from(&poles[..(ord as usize)/2]);
-        println!("UPPER POLES: {:?}", &poles_upper);
+        // let poles_upper = Vec::from(&poles[..(ord as usize)/2]);
+        // println!("UPPER POLES: {:?}", &poles_upper);
 
-        // build freq response from upper-quadrant poles
-        let freqfn = |fnorm: Float| {
+        // freq response function
+        let freqfn = |wnorm: Float| {
             // get freq resp component from each pole
-            let f = poles_upper.iter()
-                .map(|p| Complex::new(1.0 - fnorm.powi(2), -2.0 * fnorm * p.re))
-                .product::<CFloat>()
-                .inv();
+            // let f = poles_upper.iter()
+            //     .map(|p| Complex::new(1.0 - wnorm.powi(2), -2.0 * wnorm * p.re))
+            //     .product::<CFloat>()
+            //     .finv();
             // if odd order, include p=-1 component
-            match odd_ord {
-                false => f,
-                true => f * Complex::new(1.0, fnorm).inv()
-            }
+            // match odd_ord {
+            //         false => f,
+            //         true => f * Complex::new(1.0, wnorm).finv()
+            //     }
+            // };
+
+            // don't combine conj poles
+            // just compute 1 / prod[ jw - p_i ]
+            poles_bilin.iter()
+                .map(|p| Complex::new(-p.re, -p.im + wnorm))
+                .product::<CFloat>()
+                .finv()
         };
 
         // sample the freq response
-        let nsamp = OVERSAMPLE_FACTOR * n;
+        let nsamp = OVERSAMPLE_FACTOR * n * 2;
         let nsamp_step = (nsamp as Float).recip() * TAU;
         let i2w = |x: usize| {
             /*
             original range: [0, nsamp)
-            a = x * stepsz: [0, PI)
+            a = x * stepsz: [0, 2PI)
             b = a + PI:     [PI, 3PI)
             c = b % 2PI:    [PI, 2PI) + [0, PI)
             d = c - PI:     [0, PI) + [-PI, 0)
+
+            e = d * fs      [0, fs/2) + [-fs/2, 0)
             */
             ((x as Float * nsamp_step) + PI).rem(TAU) - PI
+            // (((x as Float * nsamp_step) + PI).rem(TAU) - PI) * fs
         };
+
+        // wvals: frequencies to sample: [-pi, pi] rad/samp
         let wvals: Vec<Float> = (0..nsamp)
             .map(i2w)
             .collect();
-        let fvals: Vec<Float> = wvals.iter()
-            .map(|&w| 2.0 * fs * (w/2.0).tan())
-            .collect();        
-        let fvals_norm: Vec<Float> = fvals.iter()
-            .map(|&f| f / fc)
-            .collect();
-        let mut hvals: Vec<CFloat> = fvals_norm.into_iter()
+
+        // sample freqfn
+        let mut hvals: Vec<CFloat> = wvals.into_iter()
             .map(freqfn)
             .collect();
-        // let hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
-        // let hvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
+        let _hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
+        let _hvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
 
         // inverse fft
         let mut fft_plan = FftPlanner::new();
@@ -254,21 +275,17 @@ impl Conv1d {
 
         // resample ifft to n points and discard nonreal parts
         // also normalize ifft output: scale by 1/len().sqrt()
+        // also ignore latter half bc ifft result is symmetric
         let fft_scalar = (hvals.len() as Float).sqrt().recip();
-        let kernel: Vec<Float> = hvals.iter()
+        let kernel: Vec<Float> = hvals[..n*OVERSAMPLE_FACTOR]
+            .iter()
             .step_by(OVERSAMPLE_FACTOR)
             .map(|&x| x.re * fft_scalar)
             .collect();
 
-        // normalize so that sum(kernel) = 1
-        // let ksum_inv = kernel.iter().sum::<Float>().recip();
-        // kernel = kernel.iter()
-        //     .map(|&x| x * ksum_inv)
-        //     .collect();
-
         Self {kernel, lastchunk: vec![]}
     }
- 
+
     // clear cached last chunk
     pub fn clear_memory(&mut self) {
         self.lastchunk = vec![];
