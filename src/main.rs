@@ -2,14 +2,13 @@ mod transforms;
 mod buffers;
 
 use std::path::Path;
-use std::f64::consts::TAU;
 use hound::{WavReader,WavWriter};
 use buffers::{ChunkedSampler,write_buffer};
 use transforms::Transform;
 
 const WAVFILE: &str = "./data/maggi.wav";
 const WAV_OUTPUT: &str = "./data/maggi-new.wav";
-const BUFFER_CAP: usize = 1024;
+const BUFFER_CAP: usize = 2048;
 
 fn main() {
     // initialize reader
@@ -17,12 +16,7 @@ fn main() {
     let mut wav_reader =  WavReader::open(path)
         .expect("couldn't open file");
     let wavspec = wav_reader.spec();
-    let sample_format_str = match wavspec.sample_format {
-        hound::SampleFormat::Float => "float",
-        hound::SampleFormat::Int => "int"
-    };
-    println!("WAV spec:\n> channels: {}\n> fs: {}\n> bit depth: {}\n> dtype: {}", 
-        wavspec.channels, wavspec.sample_rate, wavspec.bits_per_sample, sample_format_str);
+    dbg!(&wavspec);
     let mut sample_iter = wav_reader.samples::<i16>();
     let mut sample_buffer = ChunkedSampler::new(
         &mut sample_iter,
@@ -40,28 +34,27 @@ fn main() {
     let buf = sample_buffer.next().expect("couldn't load buffer");
     let data = buf.data();
     let rms = data.iter()
-        .fold(0.0, |acc, &x| acc + x.pow(2) as f64)
-        .sqrt();
-    let bufmin = data.iter().min().unwrap();
-    let bufmax = data.iter().max().unwrap();
-    println!("{} samples loaded", data.len());
-    println!("mean = {}, min = {}, max = {}", rms, bufmin, bufmax);
+        .fold(0, |acc, &x| acc + x.pow(2) as u32);
+    let rms = (rms as f64 / data.len() as f64).sqrt();
+    println!("BUFFER INFO:");
+    println!("> buffer size: {}", data.len());
+    println!("> rms = {}", rms);
+    println!("> min = {}", data.iter().min().unwrap());
+    println!("> max = {}", data.iter().max().unwrap());
 
     write_buffer(&mut writer, data);
 
     // read & write remaining buffers
-    // let amp_quieter = transforms::Amp::from_db(-10.0);
-    // let trifilt = transforms::Conv1d::new(Vec::from(TRIANGLE_19));
     let fs = wavspec.sample_rate as f64;
-    let fc = 1000.0; // cutoff freq in hz
-    let wc = fc * TAU / fs;
-    //let ws = fs * TAU;
-    // let mut lowpass = transforms::Conv1d::sinc(60, wc);
-    let mut lowpass = transforms::Conv1d::butterworth(60, wc, 2, fs);
+    let fc: f64 = 1000.0; // cutoff freq in hz
+    let lowpass = transforms::Conv1d::butterworth(200, fc, 1, fs);
+    // let lowpass = transforms::Conv1d::sinc(60, wc);
+    let amp = transforms::Amp::from_db(3.0);
+    let mut chain = transforms::Chain::new(lowpass)
+        .push(amp);
     for mut buf in sample_buffer {
-        // amp_quieter.transform(&mut buf);
-        lowpass.transform(&mut buf);
+        chain.transform(&mut buf);
         write_buffer(&mut writer, buf.data());
     }
-    lowpass.clear_memory();
+    // lowpass.clear_memory();
 }
