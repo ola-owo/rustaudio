@@ -330,11 +330,11 @@ impl Transform for Conv1d {
                 .zip(bufpart)
                 .map(|(k,x)| k*x)
                 .sum();
-            output.push(res as Int);
+            output.push(res.round() as Int);
         }
 
         // save last chunk (n*(k-1)) samples
-        self.lastchunk = data[..npad].iter().map(|&x| x as Float).collect();
+        self.lastchunk = data[data.len()-npad..].iter().map(|&x| x as Float).collect();
 
         // move buffer pointer to output vector
         *data = output;
