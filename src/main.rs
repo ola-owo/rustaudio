@@ -8,7 +8,7 @@ use transforms::Transform;
 
 const WAVFILE: &str = "./data/maggi.wav";
 const WAV_OUTPUT: &str = "./data/maggi-new.wav";
-const BUFFER_CAP: usize = 1024;
+const BUFFER_CAP: usize = 2048;
 
 fn main() {
     // initialize reader
@@ -34,7 +34,7 @@ fn main() {
     let buf = sample_buffer.next().expect("couldn't load buffer");
     let chunk1 = buf.data();
     let rms = chunk1.iter()
-        .fold(0, |acc, &x| acc + x.pow(2) as u64);
+        .fold(0, |acc, &x| acc + (x as i64).pow(2) as u64);
     let rms = (rms as f64 / chunk1.len() as f64).sqrt();
     println!("BUFFER INFO:");
     println!("> buffer size: {}", chunk1.len());
@@ -46,8 +46,8 @@ fn main() {
 
     // read & write remaining buffers
     let fs = wavspec.sample_rate as f64;
-    let fc: f64 = 50.0; // cutoff freq in hz
-    let mut tf = transforms::Conv1d::butterworth(256, fc, 3, fs);
+    let fc: f64 = 500.0; // cutoff freq in hz
+    let mut tf = transforms::Conv1d::butterworth(256, fc, 1, fs);
     // let mut tf = transforms::Conv1d::sinc(60, wc);
     // let mut tf = transforms::Chain::new(tf)
     //     .push(transforms::Amp::from_db(3.0));
