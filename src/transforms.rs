@@ -242,7 +242,8 @@ impl Conv1d {
         let nsamp = OVERSAMPLE_FACTOR * n;
         let nsamp_step = (nsamp as Float).recip() * TAU;
 
-        // convert sample indices 0..nsamp to 1/z values
+        // convert sample indices 0..nsamp to 1/z values,
+        // representing frequencies 0 to 2PI
         let i2z = |x: usize| {
             /*
                 original range: [0, nsamp)
@@ -267,14 +268,15 @@ impl Conv1d {
         let mut fft_plan = FftPlanner::new();
         let ifft = fft_plan.plan_fft_inverse(nsamp as usize);
         ifft.process(&mut hvals);
+        let _ihvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
+        let _ihvals_arg: Vec<Float> = hvals.iter().map(|&x| x.arg()).collect();
+        let _ihvals_re: Vec<Float> = hvals.iter().map(|&x| x.re).collect();
 
-        // resample ifft to n points and discard nonreal parts
+        // truncate ifft to n points and discard nonreal parts
         // also normalize ifft output: scale by 1/sqrt(len())
-        // also ignore latter half bc ifft result is symmetric
         let fft_scalar = (hvals.len() as Float).sqrt().recip();
-        let kernel: Vec<Float> = hvals
-            .iter()
-            .step_by(OVERSAMPLE_FACTOR)
+         let kernel: Vec<Float> = hvals.iter()
+            .take(n)
             .map(|&x| x.re * fft_scalar)
             .collect();
 
@@ -360,6 +362,8 @@ fn energy<T:Num+Copy>(vec: &Vec<T>) -> T {
 }
 
 #[allow(dead_code)]
+// bound on T means that T is castable to R
+// bound on R means that R is a Float
 fn rms<T:Num+AsPrimitive<R>, R:'static+num_traits::Float>(vec: &Vec<T>) -> R {
     let e = energy(vec).as_();
     e.sqrt()
