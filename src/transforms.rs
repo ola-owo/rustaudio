@@ -1,6 +1,5 @@
 // std lib imports
 use std::f64::consts::*;
-use std::ops::Rem;
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
 use num_traits::{Num, AsPrimitive};
@@ -175,6 +174,7 @@ impl Conv1d {
 
         // Compute butter poles
         // pole magnitude is actually wc, but we're normalizing to unit length
+        // poles are ordered CCW and are symmetric across negative real axis
         let ordf = ord as Float;
         let odd_ord = ord % 2 == 1;
         let poles = match odd_ord {
@@ -185,7 +185,7 @@ impl Conv1d {
                 (-i0 ..= i0)
                 .map(|i| Complex::from_polar(
                     1.0,
-                    PI * ((ord as i32 + i) as Float / ordf)
+                    PI * ((i + ord as i32) as Float / ordf)
                 ))
                 .collect::<Vec<CFloat>>()
             },
@@ -199,70 +199,65 @@ impl Conv1d {
                 .collect::<Vec<CFloat>>()
             }
         };
+
         for (i, pole) in poles.iter().enumerate() {
             println!("POLE {}: {:?}", i, pole);
         }
 
-        // bilinear transform poles from s to z space
-        // let kwarp = wc / (0.5 * wc / fs).tan(); // freq warp centered at wc
-        let kwarp = (wc * ts * 0.5).tan().recip();
-        let poles_bilin = poles.iter()
-            .map(|&p| (kwarp + p) / (kwarp - p))
-            .collect::<Vec<CFloat>>();
-        for (i, pole) in poles_bilin.iter().enumerate() {
-            println!("POLE {} (prewarped): {:?}", i, pole);
-        }
+        // get upper left quadrant (not including p=-1)
+        let (poles_upper, poles_lower) = poles.split_at(ord as usize / 2);
 
-        // get poles in upper left quadrant (Re<0, Im>0) -- EXCLUDING p=-1
-        // let poles_upper = Vec::from(&poles[..(ord as usize)/2]);
-        // println!("UPPER POLES: {:?}", &poles_upper);
+        // bilinear transform poles from s to z space
+        let wwarp = (wc * ts * 0.5).tan();
 
         // freq response function
-        let freqfn = |wnorm: Float| {
-            // get freq resp component from each pole
-            // let f = poles_upper.iter()
-            //     .map(|p| Complex::new(1.0 - wnorm.powi(2), -2.0 * wnorm * p.re))
-            //     .product::<CFloat>()
-            //     .finv();
-            // if odd order, include p=-1 component
-            // match odd_ord {
-            //         false => f,
-            //         true => f * Complex::new(1.0, wnorm).finv()
-            //     }
-            // };
-
-            // don't combine conj poles
-            // just compute 1 / prod[ jw - p_i ]
-            poles_bilin.iter()
-                .map(|p| Complex::new(-p.re, -p.im + wnorm))
-                .product::<CFloat>()
-                .finv()
+        // input (1/z) = exp(-j*w)
+        // output = H(1/z)
+        let freqfn = |z: Complex<Float>| {
+            let one_plus_z = 1.0 + z;
+            let one_minus_z = 1.0 - z;
+            // polefn(p) combines p and p* components of H(z)
+            let polefn = |p: &Complex<Float>| {
+                let p_sum = 2.0 * p.re * p.arg().cos(); // p + p* = 2 r cos(w)
+                let p_prod = p.re.powi(2); // p* p = r^2
+                let numer = wwarp.powi(2) * (1.0 + 2.0*z + z.powu(2));
+                let denom = one_minus_z.powi(2)
+                                          - wwarp * p_sum * one_plus_z * one_minus_z
+                                          + (wwarp * one_plus_z).powi(2) * p_prod;
+                numer / denom
+            };
+            let h = poles_upper.iter()
+                .map(|p| polefn(p))
+                .product();
+            if odd_ord {
+                // pole0 = H(z) component at p = exp(-pi)
+                let pole0 = (wwarp * one_plus_z) / (1.0 + wwarp + (wwarp - 1.0) * z);
+                h * pole0
+            } else {
+                h
+            }
         };
 
         // sample the freq response
-        let nsamp = OVERSAMPLE_FACTOR * n * 2;
+        let nsamp = OVERSAMPLE_FACTOR * n;
         let nsamp_step = (nsamp as Float).recip() * TAU;
-        let i2w = |x: usize| {
+
+        // convert sample indices 0..nsamp to 1/z values
+        let i2z = |x: usize| {
             /*
-            original range: [0, nsamp)
-            a = x * stepsz: [0, 2PI)
-            b = a + PI:     [PI, 3PI)
-            c = b % 2PI:    [PI, 2PI) + [0, PI)
-            d = c - PI:     [0, PI) + [-PI, 0)
-
-            e = d * fs      [0, fs/2) + [-fs/2, 0)
+                original range: [0, nsamp)
+                a = x * stepsz: [0, 2PI)
+                b = exp(-a j) :  [1 .. j .. -1 .. -j .. 0)
             */
-            ((x as Float * nsamp_step) + PI).rem(TAU) - PI
-            // (((x as Float * nsamp_step) + PI).rem(TAU) - PI) * fs
+            let a = x as Float * nsamp_step;
+            Complex::from_polar(1.0, -a)
         };
-
-        // wvals: frequencies to sample: [-pi, pi] rad/samp
-        let wvals: Vec<Float> = (0..nsamp)
-            .map(i2w)
+        let zvals: Vec<Complex<Float>> = (0..nsamp)
+            .map(i2z)
             .collect();
 
         // sample freqfn
-        let mut hvals: Vec<CFloat> = wvals.into_iter()
+        let mut hvals: Vec<CFloat> = zvals.into_iter()
             .map(freqfn)
             .collect();
         let _hvals_abs: Vec<Float> = hvals.iter().map(|&x| x.norm()).collect();
@@ -274,10 +269,10 @@ impl Conv1d {
         ifft.process(&mut hvals);
 
         // resample ifft to n points and discard nonreal parts
-        // also normalize ifft output: scale by 1/len().sqrt()
+        // also normalize ifft output: scale by 1/sqrt(len())
         // also ignore latter half bc ifft result is symmetric
         let fft_scalar = (hvals.len() as Float).sqrt().recip();
-        let kernel: Vec<Float> = hvals[..n*OVERSAMPLE_FACTOR]
+        let kernel: Vec<Float> = hvals
             .iter()
             .step_by(OVERSAMPLE_FACTOR)
             .map(|&x| x.re * fft_scalar)
