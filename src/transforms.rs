@@ -205,7 +205,7 @@ impl Conv1d {
         }
 
         // get upper left quadrant (not including p=-1)
-        let (poles_upper, poles_lower) = poles.split_at(ord as usize / 2);
+        let (poles_upper, _poles_lower) = poles.split_at(ord as usize / 2);
 
         // bilinear transform poles from s to z space
         let wwarp = (wc * ts * 0.5).tan();
@@ -240,7 +240,7 @@ impl Conv1d {
 
         // sample the freq response
         let nsamp = OVERSAMPLE_FACTOR * n;
-        let nsamp_step = (nsamp as Float).recip() * TAU;
+        let nsamp_step = (nsamp as Float).recip() * PI;
 
         // convert sample indices 0..nsamp to 1/z values,
         // representing frequencies 0 to 2PI
@@ -253,9 +253,13 @@ impl Conv1d {
             let a = x as Float * nsamp_step;
             Complex::from_polar(1.0, -a)
         };
-        let zvals: Vec<Complex<Float>> = (0..nsamp)
-            .map(i2z)
-            .collect();
+        let mut zvals: Vec<Complex<Float>> = Vec::with_capacity(2 * nsamp);
+        // zvals_1 = H(1/z) from 0 to PI (inclusive, len=nsamp+1)
+        let zvals_1: Vec<Complex<Float>> = (0..nsamp+1).map(i2z).collect();
+        zvals.extend_from_slice(&zvals_1[..]);
+        // zvals_2 = H(1/z) from PI to 2PI (exclusive, len=nsamp-1)
+        let zvals_2 = zvals_1[1..nsamp].iter().rev();
+        zvals.extend(zvals_2);
 
         // sample freqfn
         let mut hvals: Vec<CFloat> = zvals.into_iter()
