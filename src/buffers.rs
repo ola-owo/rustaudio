@@ -30,10 +30,9 @@ impl<'wr, R:Read, S:Sample> Iterator for ChunkedSampler<'wr, R, S> {
     type Item = SampleBuffer<S>;
     fn next(&mut self) -> Option<Self::Item> {
         let mut sample_read = false;
-        let maxn = self.buffer_cap as i32;
         let mut vec = Vec::with_capacity(self.buffer_cap);
         let mut sample: S;
-        for _ in 0..maxn {
+        for _ in 0..self.buffer_cap {
             if let Some(res) = self.sample_iter.next() {
                 sample = res.expect("error while reading sample");
                 sample_read = true;

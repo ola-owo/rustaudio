@@ -8,7 +8,7 @@ use transforms::Transform;
 
 const WAVFILE: &str = "./data/maggi.wav";
 const WAV_OUTPUT: &str = "./data/maggi-new.wav";
-const BUFFER_CAP: usize = 2048;
+const BUFFER_CAP: usize = 1024;
 
 fn main() {
     // initialize reader
@@ -32,28 +32,27 @@ fn main() {
 
     // read & write 1st buffer
     let buf = sample_buffer.next().expect("couldn't load buffer");
-    let data = buf.data();
-    let rms = data.iter()
-        .fold(0, |acc, &x| acc + x.pow(2) as u32);
-    let rms = (rms as f64 / data.len() as f64).sqrt();
+    let chunk1 = buf.data();
+    let rms = chunk1.iter()
+        .fold(0, |acc, &x| acc + x.pow(2) as u64);
+    let rms = (rms as f64 / chunk1.len() as f64).sqrt();
     println!("BUFFER INFO:");
-    println!("> buffer size: {}", data.len());
+    println!("> buffer size: {}", chunk1.len());
     println!("> rms = {}", rms);
-    println!("> min = {}", data.iter().min().unwrap());
-    println!("> max = {}", data.iter().max().unwrap());
+    println!("> min = {}", chunk1.iter().min().unwrap());
+    println!("> max = {}", chunk1.iter().max().unwrap());
 
-    write_buffer(&mut writer, data);
+    write_buffer(&mut writer, chunk1);
 
     // read & write remaining buffers
     let fs = wavspec.sample_rate as f64;
-    let fc: f64 = 1000.0; // cutoff freq in hz
-    let lowpass = transforms::Conv1d::butterworth(200, fc, 1, fs);
-    // let lowpass = transforms::Conv1d::sinc(60, wc);
-    let amp = transforms::Amp::from_db(3.0);
-    let mut chain = transforms::Chain::new(lowpass)
-        .push(amp);
+    let fc: f64 = 50.0; // cutoff freq in hz
+    let mut tf = transforms::Conv1d::butterworth(256, fc, 3, fs);
+    // let mut tf = transforms::Conv1d::sinc(60, wc);
+    // let mut tf = transforms::Chain::new(tf)
+    //     .push(transforms::Amp::from_db(3.0));
     for mut buf in sample_buffer {
-        chain.transform(&mut buf);
+        tf.transform(&mut buf);
         write_buffer(&mut writer, buf.data());
     }
     // lowpass.clear_memory();
