@@ -1,8 +1,8 @@
 use std::io::{Read,Write,Seek};
 use hound::{WavSamples,Sample,WavWriter};
 
-type ChannelCount = u16;
-type SampleRate = u32;
+pub type ChannelCount = u16;
+pub type SampleRate = u32;
 
 /*
  * ChunkedSampler: wrapper around WavSamples that loads chunks of samples.

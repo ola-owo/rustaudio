@@ -1,11 +1,13 @@
 // std lib imports
 use std::f64::consts::*;
+use std::collections::VecDeque;
+use std::iter::zip;
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
 use num_traits::{Num, AsPrimitive};
 use num_traits::identities::zero;
 // local crates
-use crate::buffers::SampleBuffer;
+use crate::buffers::{SampleBuffer, ChannelCount};
 
 type Float = f64;
 type Int = i16; // default sample data type
@@ -351,6 +353,105 @@ impl Transform for Conv1d {
     }
 }
 
+/*
+ * (EXPERIMENTAL) Represent systems as difference equations
+ * This might be more efficient than Conv1d
+ * 
+ * BORING MATH:
+ *        [a0 + a1 z^{-1} + ... + ak z^{-k}]     Y(z)
+ * H(z) = __________________________________  =  ____
+ *        [b0 + b1 z^{-1} + ... + bm z^{-m}]     X(z)
+ * 
+ * <--> a0 x[n] + ... + ak x[n-k] = b0 y[n] + ... + bm y[n-m]
+ * <--> y[n] = [(a0 x[n] + ... + ak x[n-k]) - (b1 y[n-1] + ... + bm y[n-m])] / b0
+ * 
+ * `xcoeff` represents numerator coefficients
+ * `ycoeff` represents denominator coefficients
+ * `xvals[c]` contains previous x-values from channel c:
+ *      back = new values, front = old values
+ *      (same thing for yvals)
+ */
+pub struct DiffEq {
+    xcoeff: Vec<Float>,          // x[n] coefficients
+    ycoeff: Vec<Float>,          // y[n] coefficients
+    xvals: Vec<VecDeque<Float>>, // cached x-values
+    yvals: Vec<VecDeque<Float>>, // cached y-values
+    numch: ChannelCount          // number of channels
+}
+
+impl DiffEq {
+    pub fn new(numer: Vec<Float>, denom: Vec<Float>, numch: ChannelCount) -> Self {
+        let channelct = numch as usize;
+        let nx = numer.len();
+        let ny = denom.len();
+        let mut xvals = Vec::with_capacity(channelct);
+        let mut yvals = Vec::with_capacity(channelct);
+        for _ in 0..numch {
+            xvals.push(VecDeque::from(vec![0.0; nx]));
+            yvals.push(VecDeque::from(vec![0.0; ny]));
+        }
+
+        Self {
+            xvals,
+            yvals,
+            xcoeff: numer,
+            ycoeff: denom,
+            numch
+        }
+    }
+}
+
+impl Transform for DiffEq {
+    fn reset(&mut self) {
+        self.xvals.clear();
+        self.yvals.clear();
+    }
+
+    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+        let numch = buf.channels() as usize;
+        assert!(self.numch == numch as ChannelCount,
+            "channel count doesn't match! (self={}, buffer={})", self.numch, numch
+        );
+        let data = buf.data_mut();
+        let mut data_new: Vec<Int> = vec![0; data.len()];
+
+        let mut x_sum: Float; // x_sum = a0 x[n] + ... + ak x[n-k]
+        let mut y_sum: Float; // y_sum = b1 y[n-1] + ... + bm y[n-m]
+        let mut y_new: Float; // current y[n] value
+        for ch in 0..numch {
+            let x = self.xvals.get_mut(ch).unwrap();
+            let y = self.yvals.get_mut(ch).unwrap();
+
+            let sample_iter = zip(data.iter(), data_new.iter_mut())
+                .skip(ch)
+                .step_by(numch);
+            for (samp, newsamp) in sample_iter {
+                // get newest x-value (x[n]) and pop oldest x-value
+                x.pop_front();
+                x.push_back(*samp as Float);
+
+                // compute sum[ x_0 x[n] ... x_k x[n-k] ]
+                x_sum = zip(self.xcoeff.iter(), x.iter())
+                    .map(|(&coeff, &xval)| {coeff * xval})
+                    .sum();
+                // compute sum[ y_1 y[n] ... y_m x[n-m] ]
+                y_sum = zip(self.ycoeff.iter(), y.iter())
+                    .skip(1)
+                    .map(|(&coeff, &yval)| {coeff * yval})
+                    .sum();
+
+                // compute y[n], pop oldest y-value, write to buffer
+                y_new = (x_sum - y_sum) / self.ycoeff.get(0).unwrap();
+                y.pop_front();
+                y.push_back(y_new);
+                *newsamp = y_new.round() as Int;
+            }
+        }
+
+        // replace old buffer with new
+        *data = data_new;
+    }
+}
 
 /*
 ToMono: average all signals together

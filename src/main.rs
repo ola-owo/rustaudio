@@ -4,6 +4,7 @@ mod buffers;
 use std::path::Path;
 use hound::{WavReader,WavWriter};
 use buffers::{ChunkedSampler,write_buffer};
+
 use transforms::Transform;
 
 const WAVFILE: &str = "./data/maggi.wav";
@@ -44,13 +45,9 @@ fn main() {
 
     write_buffer(&mut writer, chunk1);
 
+    // basic passthrough transform (y[n] = x[n])
+    let mut tf = transforms::DiffEq::new(vec![1.0], vec![1.0], buf.channels());
     // read & write remaining buffers
-    let fs = wavspec.sample_rate as f64;
-    let fc: f64 = 500.0; // cutoff freq in hz
-    let mut tf = transforms::Conv1d::butterworth(256, fc, 1, fs);
-    // let mut tf = transforms::Conv1d::sinc(60, wc);
-    // let mut tf = transforms::Chain::new(tf)
-    //     .push(transforms::Amp::from_db(3.0));
     for mut buf in sample_buffer {
         tf.transform(&mut buf);
         write_buffer(&mut writer, buf.data());
