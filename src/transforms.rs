@@ -17,6 +17,7 @@ filter, pan, gain, whatever
 */
 pub trait Transform {
     fn transform(&mut self, buf: &mut SampleBuffer<Int>);
+    fn reset(&mut self);
 }
 
 // Dummy transform that does nothing
@@ -24,6 +25,7 @@ pub struct PassThrough;
 
 impl Transform for PassThrough {
     fn transform(&mut self, _buf: &mut SampleBuffer<Int>) {}
+    fn reset(&mut self) {}
 }
 
 // Chain multiple transforms together
@@ -54,6 +56,12 @@ impl Transform for Chain {
     fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
         for tf_box in self.chain.iter_mut() {
             tf_box.transform(buf);
+        }
+    }
+
+    fn reset(&mut self) {
+        for tf_box in self.chain.iter_mut() {
+            tf_box.reset();
         }
     }
 }
@@ -95,6 +103,8 @@ impl Transform for Amp {
             .map(|x| ((*x as Float) * self.gain) as Int)
             .collect::<Vec<Int>>();
     }
+
+    fn reset(&mut self) {}
 }
 
 /*
@@ -286,12 +296,6 @@ impl Conv1d {
 
         Self {kernel, lastchunk: vec![]}
     }
-
-    // clear cached last chunk
-    pub fn clear_memory(&mut self) {
-        self.lastchunk = vec![];
-    }
-
 }
 
 impl Transform for Conv1d {
@@ -340,6 +344,11 @@ impl Transform for Conv1d {
         // move buffer pointer to output vector
         *data = output;
     }
+
+    // delete cached data chunk
+    fn reset(&mut self) {
+        self.lastchunk = vec![];
+    }
 }
 
 
@@ -357,6 +366,8 @@ impl Transform for ToMono {
             chunk.fill(avg);
         }
     }
+
+    fn reset(&mut self) {}
 }
 
 #[allow(dead_code)]
