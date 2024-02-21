@@ -352,9 +352,10 @@ impl Transform for ToMono {
     fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
         let numch = buf.channels();
         let data = buf.data_mut();
-        *data = data.chunks(numch as usize)
-            .map(|x| x.iter().sum())
-            .collect();
+        for chunk in data.chunks_mut(numch as usize) {
+            let avg = chunk.iter().sum::<Int>() / numch as Int;
+            chunk.fill(avg);
+        }
     }
 }
 
