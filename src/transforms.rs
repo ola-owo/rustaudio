@@ -82,7 +82,7 @@ impl Amp {
     pub fn new(gain: Float) -> Self {
         Self {gain}
     }
-    pub fn from_db(db: Float) -> Self {
+    pub fn db(db: Float) -> Self {
         let gain = Self::db2gain(db);
         Self {gain}
     }
@@ -94,7 +94,7 @@ impl Amp {
         self.gain = gain;
     }
     fn db2gain(db: Float) -> Float{
-        10.0_f64.powf(-db / 20.0)
+        10.0_f64.powf(db / 20.0)
     }
 }
 
