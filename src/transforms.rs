@@ -435,14 +435,14 @@ impl Transform for DiffEq {
                     .map(|(&coeff, &xval)| {coeff * xval})
                     .sum();
                 // compute sum[ y_1 y[n] ... y_m x[n-m] ]
+                y.pop_front();
                 y_sum = zip(self.ycoeff.iter(), y.iter())
-                    .skip(1)
+                    .take(y.len()-1)
                     .map(|(&coeff, &yval)| {coeff * yval})
                     .sum();
 
                 // compute y[n], pop oldest y-value, write to buffer
-                y_new = (x_sum - y_sum) / self.ycoeff.get(0).unwrap();
-                y.pop_front();
+                y_new = (x_sum - y_sum) / self.ycoeff.get(y.len()-1).unwrap();
                 y.push_back(y_new);
                 *newsamp = y_new.round() as Int;
             }
