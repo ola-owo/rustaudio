@@ -379,6 +379,12 @@ pub struct DiffEq {
     numch: ChannelCount          // number of channels
 }
 
+/*
+ * build a linear Transform from transfer function coefficients
+ *
+ * `numer` = numerator coefficients (from z^0 to z^{-Inf})
+ * `denom` = denominator coefficients
+ */
 impl DiffEq {
     pub fn new(numer: Vec<Float>, denom: Vec<Float>, numch: ChannelCount) -> Self {
         let channelct = numch as usize;
@@ -391,13 +397,56 @@ impl DiffEq {
             yvals.push(VecDeque::from(vec![0.0; ny]));
         }
 
+        // reverse order of coefficients (x[n-Inf] to x[n])
+        // so that they match x/yvals (oldest to newest)
+        let mut xcoeff = numer;
+        let mut ycoeff = denom;
+        xcoeff.reverse();
+        ycoeff.reverse();
+
         Self {
             xvals,
             yvals,
-            xcoeff: numer,
-            ycoeff: denom,
+            xcoeff,
+            ycoeff,
             numch
         }
+    }
+
+    /*
+     * 1st order butterworth
+     *
+     *        W + W z^{-1}
+     * H(z) = ------------------------
+     *        (W + 1) + (W - 1) z^{-1}
+     */
+    pub fn butterworth1(fc: Float, fs: Float, numch: ChannelCount) -> Self {
+        let wc = fc * TAU;
+        let w = (wc * 0.5 / fs).tan();
+
+        let numer = vec![w, w];
+        let denom = vec![w + 1.0, w - 1.0];
+
+        Self::new(numer, denom, numch)
+    }
+
+    /*
+     * 2nd order butterworth (UNSTABLE AND PROBABLY WRONG)
+     *
+     *        W^2 + 2 W^2 z^{-1} w^2 z^{-2}
+     * H(z) = ------------------------------------------------------------------
+     *        1 + W sqrt2 + W^2 + 2(W^2 - 1) z^{-1} + (W^2 - W sqrt2 + 1) z^{-2}
+     */
+    pub fn butterworth2(fc: Float, fs: Float, numch: ChannelCount) -> Self {
+        let wc = fc * TAU;
+        let w = (wc * 0.5 / fs).tan();
+        let w2 = w.powi(2);
+        let wroot2 = w * SQRT_2;
+
+        let numer = vec![w2, 2.0*w2, w2];
+        let denom = vec![1.0 + wroot2 + w2, 2.0*(w2 - 1.0), w2 - wroot2 + 1.0];
+
+        Self::new(numer, denom, numch)
     }
 }
 

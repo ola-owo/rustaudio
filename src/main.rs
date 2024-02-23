@@ -7,8 +7,8 @@ use buffers::{ChunkedSampler,write_buffer};
 
 use transforms::Transform;
 
-const WAVFILE: &str = "./data/maggi.wav";
-const WAV_OUTPUT: &str = "./data/maggi-new.wav";
+const WAVFILE: &str = "./data/bubbly2.wav";
+const WAV_OUTPUT: &str = "./data/bubbly2-new.wav";
 const BUFFER_CAP: usize = 2048;
 
 fn main() {
@@ -46,11 +46,14 @@ fn main() {
     write_buffer(&mut writer, chunk1);
 
     // basic passthrough transform (y[n] = x[n])
-    let mut tf = transforms::DiffEq::new(vec![1.0], vec![1.0], buf.channels());
+    // let mut tf = transforms::DiffEq::new(vec![1.0], vec![1.0], buf.channels());
+    let fs = wavspec.sample_rate as f64;
+    let mut tf = transforms::Chain::new(transforms::Amp::db(10.0))
+        .push(transforms::DiffEq::butterworth2(500.0, fs, wavspec.channels))
+        .push(transforms::Chain::new(transforms::Amp::db(20.0)));
     // read & write remaining buffers
     for mut buf in sample_buffer {
         tf.transform(&mut buf);
         write_buffer(&mut writer, buf.data());
     }
-    // lowpass.clear_memory();
 }
