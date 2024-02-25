@@ -50,28 +50,53 @@ impl<'wr, R:Read, S:Sample> Iterator for ChunkedSampler<'wr, R, S> {
 }
 
 
-/*
- * SampleBuffer: Represents a chunk of interleaved multichannel data
+/* SampleBuffer: Represents a chunk of interleaved multichannel data
  * Data vector is owned by this object.
+ * 
+ * S: data type of buffer (usually Int)
  */
-pub struct SampleBuffer<S> {
+#[derive(Clone)]
+ pub struct SampleBuffer<S> {
     data: Vec<S>,
-    channels: ChannelCount,
+    numch: ChannelCount,
     fs: SampleRate
 }
 
 impl<S> SampleBuffer<S> {
+    // constructor
     pub fn new(data: Vec<S>, channels: ChannelCount, fs: SampleRate) -> Self {
-        Self {data, channels, fs}
+        Self {data, numch: channels, fs}
     }
+
+    // number of channels
     pub fn channels(&self) -> ChannelCount {
-        self.channels
+        self.numch
     }
+
+    // sample rate (hz)
+    pub fn fs(&self) -> SampleRate {
+        self.fs
+    }
+
+    // reference to internal vec
     pub fn data(&self) -> &Vec<S> {
         &self.data
     }
+
+    // mutable ref to internal vec
     pub fn data_mut(&mut self) -> &mut Vec<S> {
         &mut self.data
+    }
+
+    // total length of internal vec
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    // buffer dimensions: (n_channels, n_samples_per_channel)
+    pub fn dim(&self) -> (usize, usize) {
+        let nsamp_per_ch = self.data.len() / (self.numch as usize);
+        (self.numch.into(), nsamp_per_ch)
     }
 }
 

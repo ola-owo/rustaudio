@@ -18,6 +18,7 @@ Transform an audio buffer
 filter, pan, gain, whatever
 */
 pub trait Transform {
+    // fn transform(&mut self, buf: &mut SampleBuffer<Int>);
     fn transform(&mut self, buf: &mut SampleBuffer<Int>);
     fn reset(&mut self);
 }
@@ -37,7 +38,11 @@ pub struct Chain {
 }
 
 impl Chain {
-    pub fn new(tf: impl Transform + 'static) -> Self {
+    pub fn new() -> Self {
+        Self {chain: vec![], length: 0}
+    }
+
+    pub fn from(tf: impl Transform + 'static) -> Self {
         Self {chain: vec![Box::new(tf)], length: 1}
     }
 
@@ -54,11 +59,107 @@ impl Chain {
     }
 }
 
+#[macro_export]
+macro_rules! chain {
+    ( $tf0:expr, $( $tf:expr ),* ) => {
+        transforms::Chain::from($tf0)
+        $(
+            .push($tf)
+        )*
+    };
+}
+
 impl Transform for Chain {
     fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
         for tf_box in self.chain.iter_mut() {
             tf_box.transform(buf);
         }
+    }
+
+    fn reset(&mut self) {
+        for tf_box in self.chain.iter_mut() {
+            tf_box.reset();
+        }
+    }
+}
+
+/*
+ * Chain transforms together in parallel
+ * 
+ * all transforms are weighted equally (for now)
+ */
+pub struct ParallelChain {
+    chain: Vec<Box<dyn Transform>>,
+    length: usize
+}
+
+impl ParallelChain {
+    pub fn new() -> Self {
+        Self {chain: vec![], length: 0}
+    }
+
+    pub fn from(tf: impl Transform + 'static) -> Self {
+        Self {chain: vec![Box::new(tf)], length: 1}
+    }
+
+    // 'static bound requires input [tf] to be an owned type,
+    // which all Transform implementations are
+    pub fn push(mut self, tf: impl Transform + 'static) -> Self {
+        self.chain.push(Box::new(tf));
+        self.length += 1;
+        self
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+}
+
+#[macro_export]
+macro_rules! parallel_chain {
+    ( $tf0:expr, $( $tf:expr ),* ) => {
+        transforms::ParallelChain::from($tf0)
+        $(
+            .push($tf)
+        )*
+    };
+}
+
+impl Transform for ParallelChain {
+    /*
+    newbuf = (all zeros)
+    for each tf:
+        copy buf (from original)
+        transform buf
+        scale buf
+        add to newbuf
+    reassign buf to newbuf
+    */
+    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+        // data_final = final data vector (as float)
+        let weight = (self.length as Float).recip();
+        let mut data_final = vec![0.0; buf.len()];
+
+        // run each transform, scale result, and add to data_final
+        let mut buf_copy: SampleBuffer<Int>;
+        for tf_box in self.chain.iter_mut() {
+            buf_copy = buf.clone();
+            tf_box.transform(&mut buf_copy);
+            let buf_final_iter = data_final.iter_mut();
+            let buf_part_iter = buf_copy.data().iter();
+            for (s_final, s_part) in std::iter::zip(buf_final_iter, buf_part_iter) {
+                *s_final = *s_final + *s_part as Float * weight;
+            }
+        }
+
+        // convert output data to Int
+        let mut data_final_int = Vec::with_capacity(buf.len());
+        for s in data_final.iter() {
+            data_final_int.push(*s as Int);
+        }
+
+        // assign new data to buf
+        *buf.data_mut() = data_final_int;
     }
 
     fn reset(&mut self) {
