@@ -604,7 +604,7 @@ impl Transform for DiffEq {
 }
 
 /*
-ToMono: average all signals together
+* ToMono: average all signals together
 */
 pub struct ToMono;
 
@@ -615,6 +615,65 @@ impl Transform for ToMono {
         for chunk in data.chunks_mut(numch as usize) {
             let avg = chunk.iter().sum::<Int>() / numch as Int;
             chunk.fill(avg);
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/*
+* Pan: pan signal left or right
+*/
+pub struct Pan {
+    left_wt: [Float; 2],
+    right_wt: [Float; 2]
+}
+
+impl Pan {
+    /*
+     * Pan audio to the left.
+     * pan_amt=1 --> pan all the way left
+     * pan_amt=0 --> pan all the way right
+     */
+    pub fn pan_left(pan_amt: Float) -> Self {
+        assert!(pan_amt >= 0.0 && pan_amt <= 1.0, "pan amount must be between 0-1");
+        Self {
+            left_wt: [1.0, pan_amt],
+            right_wt: [0.0, 1.0 - pan_amt]
+        }
+    }
+
+    /*
+     * Same thing as pan_left, but pans in the other direction
+     */
+    pub fn pan_right(pan_amt: Float) -> Self {
+        Self::pan_left(1.0 - pan_amt)
+    }
+
+    /*
+     * Swap left and right channels
+     */
+    pub fn invert() -> Self {
+        Self {
+            left_wt: [0.0, 1.0],
+            right_wt: [1.0, 0.0]
+        }
+    }
+}
+
+impl Transform for Pan {
+    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+        let numch = buf.channels();
+        assert!(numch == 2, "Sample buffer must be stereo");
+        for chunk in buf.data_mut().chunks_exact_mut(numch as usize) {
+            let samp_l: Int = zip(&self.left_wt, chunk.iter())
+                .map(|(&x, &y)| {(x * y as Float).round() as Int})
+                .sum();
+            let samp_r: Int = zip(&self.right_wt, chunk.iter())
+                .map(|(&x, &y)| {(x * y as Float).round() as Int})
+                .sum();
+            chunk[0] = samp_l;
+            chunk[1] = samp_r;
         }
     }
 
