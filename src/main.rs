@@ -2,18 +2,28 @@ mod transforms;
 mod buffers;
 
 use std::path::Path;
+use std::env;
 use hound::{WavReader,WavWriter};
 use buffers::{ChunkedSampler,write_buffer};
 
 use transforms::*;
 
-const WAVFILE: &str = "./data/bubbly2.wav";
-const WAV_OUTPUT: &str = "./data/bubbly2-new.wav";
 const BUFFER_CAP: usize = 2048;
 
+const HELP: &str = "usage: audio [input wav] [output wav]";
+
 fn main() {
+    // handle input args
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 3 {
+        eprintln!("{}", HELP);
+        return
+    }
+    let wav_file = args.get(1).unwrap();
+    let wav_outfile = args.get(2).unwrap();
+
     // initialize reader
-    let path = Path::new(WAVFILE);
+    let path = Path::new(wav_file);
     let mut wav_reader =  WavReader::open(path)
         .expect("couldn't open file");
     let wavspec = wav_reader.spec();
@@ -27,7 +37,7 @@ fn main() {
     );
 
     // initialize wav writer
-    let outpath = Path::new(&WAV_OUTPUT);
+    let outpath = Path::new(wav_outfile);
     let mut writer = WavWriter::create(outpath, wavspec)
         .expect("couldn't create WAV writer");
 
@@ -45,14 +55,13 @@ fn main() {
 
     write_buffer(&mut writer, chunk1);
 
-    // basic passthrough transform (y[n] = x[n])
-    // let mut tf = DiffEq::new(vec![1.0], vec![1.0], buf.channels());
-    let fs = wavspec.sample_rate as f64;
-    let mut tf = chain!(
-        Amp::db(10.0),
-        DiffEq::butterworth2(500.0, fs, wavspec.channels),
-        Amp::db(20.0)
-    );
+    // let fs = wavspec.sample_rate as f64;
+    // let mut tf = chain!(
+    //     Amp::db(10.0),
+    //     DiffEq::butterworth2(500.0, fs, wavspec.channels),
+    //     Amp::db(20.0)
+    // );
+    let mut tf = Pan::pan_left(0.0);
     for mut buf in sample_buffer {
         tf.transform(&mut buf);
         write_buffer(&mut writer, buf.data());
