@@ -3,7 +3,8 @@ mod buffers;
 
 use std::path::Path;
 use std::env;
-use hound::{WavReader,WavWriter};
+use std::fs::File;
+use hound::{WavReader,WavWriter,read_wave_header};
 use buffers::{ChunkedSampler,write_buffer};
 
 use transforms::*;
@@ -21,6 +22,12 @@ fn main() {
     }
     let wav_file = args.get(1).unwrap();
     let wav_outfile = args.get(2).unwrap();
+
+    // check whether input file is really a wav
+    let mut f = File::open(wav_file)
+        .expect("couldn't open WAV file");
+    read_wave_header(&mut f)
+        .expect("Input is not a WAV file");
 
     // initialize reader
     let path = Path::new(wav_file);
