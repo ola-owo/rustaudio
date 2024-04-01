@@ -454,9 +454,8 @@ impl Transform for Conv1d {
     }
 }
 
-/*
- * (EXPERIMENTAL) Represent systems as difference equations
- * This might be more efficient than Conv1d
+/* Represent systems as difference equations,
+ * which seems to be way faster than Conv1d
  * 
  * BORING MATH:
  *        [a0 + a1 z^{-1} + ... + ak z^{-k}]     Y(z)
@@ -477,26 +476,21 @@ pub struct DiffEq {
     ycoeff: Vec<Float>,          // y[n] coefficients
     xvals: Vec<VecDeque<Float>>, // cached x-values
     yvals: Vec<VecDeque<Float>>, // cached y-values
-    numch: ChannelCount          // number of channels
+    chcount: ChannelCount          // number of channels
 }
 
-/*
- * build a linear Transform from transfer function coefficients
+/* build a linear Transform from transfer function coefficients
  *
  * `numer` = numerator coefficients (from z^0 to z^{-Inf})
  * `denom` = denominator coefficients
  */
 impl DiffEq {
-    pub fn new(numer: Vec<Float>, denom: Vec<Float>, numch: ChannelCount) -> Self {
-        let channelct = numch as usize;
-        let nx = numer.len();
-        let ny = denom.len();
-        let mut xvals = Vec::with_capacity(channelct);
-        let mut yvals = Vec::with_capacity(channelct);
-        for _ in 0..numch {
-            xvals.push(VecDeque::from(vec![0.0; nx]));
-            yvals.push(VecDeque::from(vec![0.0; ny]));
-        }
+    const DEFAULT_CH_CAPACITY: usize = 2;
+
+    pub fn new(numer: Vec<Float>, denom: Vec<Float>) -> Self {
+        let chcount = 0 as ChannelCount;
+        let xvals = Vec::with_capacity(Self::DEFAULT_CH_CAPACITY);
+        let yvals = Vec::with_capacity(Self::DEFAULT_CH_CAPACITY);
 
         // reverse order of coefficients (x[n-Inf] to x[n])
         // so that they match x/yvals (oldest to newest)
@@ -555,45 +549,54 @@ impl Transform for DiffEq {
     fn reset(&mut self) {
         self.xvals.clear();
         self.yvals.clear();
+        self.chcount = 0;
     }
 
     fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
-        let numch = buf.channels() as usize;
-        assert!(self.numch == numch as ChannelCount,
-            "channel count doesn't match! (self={}, buffer={})", self.numch, numch
-        );
+        let chcount = buf.channels();
+        let chsize = chcount as usize;
         let data = buf.data_mut();
         let mut data_new: Vec<Int> = vec![0; data.len()];
 
         let mut x_sum: Float; // x_sum = a0 x[n] + ... + ak x[n-k]
         let mut y_sum: Float; // y_sum = b1 y[n-1] + ... + bm y[n-m]
         let mut y_new: Float; // current y[n] value
-        for ch in 0..numch {
-            let x = self.xvals.get_mut(ch).unwrap();
-            let y = self.yvals.get_mut(ch).unwrap();
+        let ylen = self.ycoeff.len(); // number of y-coefficients
+
+        // make sure channel count = buffer channels
+        if self.chcount > chcount {
+            self.reset();
+        }
+        while self.chcount < chcount {
+            self.add_ch();
+        }
+
+        for ch in 0..chsize {
+            let x_vec = self.xvals.get_mut(ch).unwrap();
+            let y_vec = self.yvals.get_mut(ch).unwrap();
 
             let sample_iter = zip(data.iter(), data_new.iter_mut())
                 .skip(ch)
-                .step_by(numch);
+                .step_by(chsize);
             for (samp, newsamp) in sample_iter {
-                // get newest x-value (x[n]) and pop oldest x-value
-                x.pop_front();
-                x.push_back(*samp as Float);
+                // get newest x-value (x[n]) and drop oldest value
+                x_vec.pop_front();
+                x_vec.push_back(*samp as Float);
 
                 // compute sum[ x_0 x[n] ... x_k x[n-k] ]
-                x_sum = zip(self.xcoeff.iter(), x.iter())
-                    .map(|(&coeff, &xval)| {coeff * xval})
+                x_sum = zip(self.xcoeff.iter(), x_vec.iter())
+                    .map(|(&coeff, &x)| {coeff * x})
                     .sum();
                 // compute sum[ y_1 y[n] ... y_m x[n-m] ]
-                y.pop_front();
-                y_sum = zip(self.ycoeff.iter(), y.iter())
-                    .take(y.len()-1)
-                    .map(|(&coeff, &yval)| {coeff * yval})
+                y_vec.pop_front();
+                y_sum = zip(self.ycoeff.iter(), y_vec.iter())
+                    .take(ylen - 1)
+                    .map(|(&coeff, &y)| {coeff * y})
                     .sum();
 
                 // compute y[n], pop oldest y-value, write to buffer
-                y_new = (x_sum - y_sum) / self.ycoeff.get(y.len()-1).unwrap();
-                y.push_back(y_new);
+                y_new = (x_sum - y_sum) / self.ycoeff.get(ylen - 1).unwrap();
+                y_vec.push_back(y_new);
                 *newsamp = y_new.round() as Int;
             }
         }
