@@ -63,12 +63,7 @@ fn main() {
     write_buffer(&mut writer, chunk1);
 
     // let fs = wavspec.sample_rate as f64;
-    // let mut tf = chain!(
-    //     Amp::db(10.0),
-    //     DiffEq::butterworth2(500.0, fs, wavspec.channels),
-    //     Amp::db(20.0)
-    // );
-    let mut tf = Pan::pan_left(0.0);
+    let mut tf = Phaser::new(2, 0.0, 0.9, 0.5);
     for mut buf in sample_buffer {
         tf.transform(&mut buf);
         write_buffer(&mut writer, buf.data());

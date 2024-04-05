@@ -4,10 +4,11 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'audio'",
+            "name": "Test bubbly2",
             "cargo": {
                 "args": [
                     "build",
@@ -19,7 +20,10 @@
                     "kind": "bin"
                 }
             },
-            "args": [],
+            "args": [
+                "data/bubbly2.wav",
+                "data/bubbly2-new.wav"
+            ],
             "cwd": "${workspaceFolder}"
         },
         {
