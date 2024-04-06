@@ -63,7 +63,7 @@ fn main() {
     write_buffer(&mut writer, chunk1);
 
     // let fs = wavspec.sample_rate as f64;
-    let mut tf = Phaser::new(2, 0.0, 0.9, 0.5);
+    let mut tf = Phaser::new(8, 0.0, 0.9, 0.9);
     for mut buf in sample_buffer {
         tf.transform(&mut buf);
         write_buffer(&mut writer, buf.data());

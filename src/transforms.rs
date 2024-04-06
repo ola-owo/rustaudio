@@ -20,7 +20,6 @@ type CFloat = Complex<Float>;
  * reset() resets the transform's internal state
  */
 pub trait Transform {
-    // fn transform(&mut self, buf: &mut SampleBuffer<Int>);
     fn transform(&mut self, buf: &mut SampleBuffer<Int>);
     fn reset(&mut self);
 }
@@ -79,6 +78,31 @@ impl Chain {
     pub fn len(&self) -> usize {
         self.chain.len()
     }
+
+    // get a reference to the nth chain element
+    pub fn get(&self, n: usize) -> Option<&dyn Transform> {
+        match self.chain.get(n) {
+            Some(tf_box) => Some(tf_box.as_ref()),
+            None => None
+        }
+    }
+
+    // get a mutable reference to the nth chain element
+    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform> {
+        match self.chain.get_mut(n) {
+            Some(tf_box) => Some(tf_box.as_mut()),
+            None => None
+        }
+    }
+
+    // remove the nth chain element (panic if out of bounds)
+    pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform>> {
+        if n >= self.chain.len() {
+            None
+        } else {
+            Some(self.chain.remove(n))
+        }
+    }
 }
 
 #[macro_export]
@@ -112,7 +136,7 @@ macro_rules! chain {
 //     }
 // }
 
-// Add 2 Chains together
+// Add 2 Chains together by merging into a single Chain
 impl Add for Chain {
     type Output = Chain;
 
@@ -179,6 +203,31 @@ impl ParallelChain {
     pub fn len(&self) -> usize {
         self.chain.len()
     }
+
+    // get a reference to the nth chain element
+    pub fn get(&self, n: usize) -> Option<&dyn Transform> {
+        match self.chain.get(n) {
+            Some(tf_box) => Some(tf_box.as_ref()),
+            None => None
+        }
+    }
+
+    // get a mutable reference to the nth chain element
+    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform> {
+        match self.chain.get_mut(n) {
+            Some(tf_box) => Some(tf_box.as_mut()),
+            None => None
+        }
+    }
+
+    // remove the nth chain element (panic if out of bounds)
+    pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform>> {
+        if n >= self.chain.len() {
+            None
+        } else {
+            Some(self.chain.remove(n))
+        }
+    }
 }
 
 // Add a Transform to a Chain
@@ -191,7 +240,7 @@ impl ParallelChain {
 //     }
 // }
 
-// Add 2 ParallelChains together
+// Add 2 ParallelChains together by merging into a single ParallelChain
 impl Add for ParallelChain {
     type Output = ParallelChain;
 
@@ -916,11 +965,11 @@ impl Phaser {
         assert!(rval < 1.0, "pole magnitude > 1 is unstable");
 
         let angles = (0..n)
-            .map(|i| (i * 180) as Float / n as Float);
+            .map(|i| i as Float * (PI / n as Float));
             // .collect::<Vec<Float>>();
         let mut allpass_chain = Chain::new();
         for ang in angles {
-            allpass_chain = allpass_chain.push(DiffEq::allpass(deg2rad(ang), rval));
+            allpass_chain = allpass_chain.push(DiffEq::allpass(ang, rval));
         }
         let chain = ParallelChain::wetdry(allpass_chain, wetness);
         Self {chain}
