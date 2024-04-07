@@ -1,5 +1,9 @@
 // std lib imports
-use std::f64::consts::*;
+use std::f32::consts::*;
+// use std::f64::consts::PI as PI64;
+// use std::f64::consts::TAU as TAU64;
+// use std::f64::consts::FRAC_1_PI as FRAC_1_PI64;
+// use std::f64::consts::SQRT_2 as SQRT_2_64;
 use std::collections::VecDeque;
 use std::iter::zip;
 use std::ops::{Add, Mul, AddAssign};
@@ -9,9 +13,9 @@ use num_traits::{Num, AsPrimitive, Zero};
 use itertools::{EitherOrBoth, Itertools};
 // local crates
 use crate::buffers::{SampleBuffer, ChannelCount};
+use crate::Float;
 
-type Float = f64;
-type Int = i16; // default sample data type
+// type Int = i16; // default sample data type
 type CFloat = Complex<Float>;
 
 /* Transform an audio buffer
@@ -20,21 +24,9 @@ type CFloat = Complex<Float>;
  * reset() resets the transform's internal state
  */
 pub trait Transform {
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>);
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>);
     fn reset(&mut self);
 }
-
-/* attempt to add Transforms together using Chain
- * This code works but won't let you use this module in other modules (i.e. main)
- */
-// impl<T: Add<Output = T>> Add for T
-// where T: Transform {
-//     type Output = T;
-//
-//     fn add(self, rhs: T) -> Self::Output {
-//         Chain::from(self).push(rhs)
-//     }
-// }
 
 // Dummy transform that does nothing
 pub struct PassThrough;
@@ -42,7 +34,7 @@ pub struct PassThrough;
 impl SingleTransform for PassThrough {}
 
 impl Transform for PassThrough {
-    fn transform(&mut self, _buf: &mut SampleBuffer<Int>) {}
+    fn transform(&mut self, _buf: &mut SampleBuffer<Float>) {}
     fn reset(&mut self) {}
 }
 
@@ -115,28 +107,7 @@ macro_rules! chain {
     };
 }
 
-// Add a Transform to a Chain
-// impl<T> Add<T> for Chain
-// where T: 'static + Transform + SingleTransform {
-//     type Output = Chain;
-
-//     fn add(self, rhs: T) -> Self::Output {
-//         self.push(rhs)
-//     }
-// }
-
-// Add a Chain to a Transform
-// impl<T> Add<Chain> for T
-// where T: SingleTransform {
-//     type Output = Chain;
-
-//     fn add(self, rhs: Chain) -> Self::Output {
-//         rhs.chain.insert(0, self);
-//         rhs
-//     }
-// }
-
-// Add 2 Chains together by merging into a single Chain
+// Merge 2 Chains together into a single Chain
 impl Add for Chain {
     type Output = Chain;
 
@@ -149,7 +120,7 @@ impl Add for Chain {
 }
 
 impl Transform for Chain {
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         for tf_box in self.chain.iter_mut() {
             tf_box.transform(buf);
         }
@@ -230,17 +201,7 @@ impl ParallelChain {
     }
 }
 
-// Add a Transform to a Chain
-// impl<T> Add<T> for ParallelChain
-// where T: 'static + Transform + SingleTransform {
-//     type Output = ParallelChain;
-
-//     fn add(self, rhs: T) -> Self::Output {
-//         self.push(rhs)
-//     }
-// }
-
-// Add 2 ParallelChains together by merging into a single ParallelChain
+// Merge 2 ParallelChains together into a single ParallelChain
 impl Add for ParallelChain {
     type Output = ParallelChain;
 
@@ -267,31 +228,24 @@ macro_rules! parallel_chain {
 }
 
 impl Transform for ParallelChain {
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         // data_final = final data vector (as float)
-        // let weight = (self.length as Float).recip();
         let mut data_final = vec![0.0; buf.len()];
 
         // run each transform, scale result, and add to data_final
-        let mut buf_copy: SampleBuffer<Int>;
+        let mut buf_copy: SampleBuffer<Float>;
         for tf_box in self.chain.iter_mut() {
             buf_copy = buf.clone();
             tf_box.transform(&mut buf_copy);
             let buf_final_iter = data_final.iter_mut();
             let buf_part_iter = buf_copy.data().iter();
             for (s_final, s_part) in std::iter::zip(buf_final_iter, buf_part_iter) {
-                *s_final += *s_part as Float;
+                *s_final += *s_part;
             }
         }
 
-        // convert output data to Int
-        let mut data_final_int = Vec::with_capacity(buf.len());
-        for s in data_final.iter() {
-            data_final_int.push(*s as Int);
-        }
-
         // assign new data to buf
-        *buf.data_mut() = data_final_int;
+        *buf.data_mut() = data_final;
     }
 
     fn reset(&mut self) {
@@ -328,16 +282,16 @@ impl Amp {
         self.gain = gain;
     }
     fn db2gain(db: Float) -> Float{
-        10.0_f64.powf(db / 20.0)
+        (10.0 as Float).powf(db / 20.0)
     }
 }
 
 impl Transform for Amp {
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         let data = buf.data_mut();
         *data = data.iter_mut()
-            .map(|x| ((*x as Float) * self.gain) as Int)
-            .collect::<Vec<Int>>();
+            .map(|x| *x * self.gain)
+            .collect::<Vec<_>>();
     }
 
     fn reset(&mut self) {}
@@ -535,16 +489,10 @@ impl Conv1d {
     }
 }
 
-impl From<DiffEq> for Conv1d {
-    fn from(diffeq: DiffEq) -> Self {
-        todo!()
-    }
-}
-
 impl Transform for Conv1d {
     // apply (causal) filter to buffer,
     // this will delay signal by k-1 samples
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         // note: multi-channel vectors are interleaved:
         // [left, right, left, right, ...]
         let numch = buf.channels();
@@ -554,16 +502,16 @@ impl Transform for Conv1d {
         let npad = numch as usize * (k-1); // amount of padding - LEFT SIDE ONLY
 
         // make padded array (as float)
-        let mut buf_padded = Vec::<Float>::with_capacity(npad + data.len());
+        let mut buf_padded = Vec::with_capacity(npad + data.len());
         if self.lastchunk.len() == npad {
             buf_padded.append(&mut self.lastchunk);
         } else {
             buf_padded.append(&mut vec![0.0; npad]);
         }
-        buf_padded.extend(&mut data.iter().map(|x| *x as Float));
+        buf_padded.extend(&mut data.iter());
 
         // make output array
-        let mut output = Vec::<Int>::with_capacity(data.len());
+        let mut output = Vec::with_capacity(data.len());
 
         // convolve buf_padded with kernel
         // output[i] = conv(kernel, bufpart)
@@ -578,11 +526,11 @@ impl Transform for Conv1d {
                 .zip(bufpart)
                 .map(|(k,x)| k*x)
                 .sum();
-            output.push(res.round() as Int);
+            output.push(res);
         }
 
         // save last chunk (n*(k-1)) samples
-        self.lastchunk = data[data.len()-npad..].iter().map(|&x| x as Float).collect();
+        self.lastchunk = data[data.len()-npad..].into();
 
         // move buffer pointer to output vector
         *data = output;
@@ -808,11 +756,11 @@ impl Transform for DiffEq {
         self.chcount = 0;
     }
 
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         let chcount = buf.channels();
         let chsize = chcount as usize;
         let data = buf.data_mut();
-        let mut data_new: Vec<Int> = vec![0; data.len()];
+        let mut data_new = vec![0.0; data.len()];
 
         let mut x_sum: Float; // x_sum = a0 x[n] + ... + ak x[n-k]
         let mut y_sum: Float; // y_sum = b1 y[n-1] + ... + bm y[n-m]
@@ -853,7 +801,7 @@ impl Transform for DiffEq {
                 // compute y[n], pop oldest y-value, write to buffer
                 y_new = (x_sum - y_sum) / self.ycoeff.get(ylen - 1).unwrap();
                 y_vec.push_back(y_new);
-                *newsamp = y_new.round() as Int;
+                *newsamp = y_new;
             }
         }
 
@@ -870,11 +818,11 @@ pub struct ToMono;
 impl SingleTransform for ToMono {}
 
 impl Transform for ToMono {
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         let numch = buf.channels();
         let data = buf.data_mut();
         for chunk in data.chunks_mut(numch as usize) {
-            let avg = chunk.iter().sum::<Int>() / numch as Int;
+            let avg = chunk.iter().sum::<Float>() / numch as Float;
             chunk.fill(avg);
         }
     }
@@ -925,15 +873,15 @@ impl Pan {
 }
 
 impl Transform for Pan {
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         let numch = buf.channels();
         assert!(numch == 2, "Sample buffer must be stereo");
         for chunk in buf.data_mut().chunks_exact_mut(numch as usize) {
-            let samp_l: Int = zip(&self.left_wt, chunk.iter())
-                .map(|(&x, &y)| {(x * y as Float).round() as Int})
+            let samp_l = zip(&self.left_wt, chunk.iter())
+                .map(|(&x, &y)| {x * y})
                 .sum();
-            let samp_r: Int = zip(&self.right_wt, chunk.iter())
-                .map(|(&x, &y)| {(x * y as Float).round() as Int})
+            let samp_r = zip(&self.right_wt, chunk.iter())
+                .map(|(&x, &y)| {x * y})
                 .sum();
             chunk[0] = samp_l;
             chunk[1] = samp_r;
@@ -966,7 +914,6 @@ impl Phaser {
 
         let angles = (0..n)
             .map(|i| i as Float * (PI / n as Float));
-            // .collect::<Vec<Float>>();
         let mut allpass_chain = Chain::new();
         for ang in angles {
             allpass_chain = allpass_chain.push(DiffEq::allpass(ang, rval));
@@ -977,7 +924,7 @@ impl Phaser {
 }
 
 impl Transform for Phaser {
-    fn transform(&mut self, buf: &mut SampleBuffer<Int>) {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         self.chain.transform(buf);
     }
 
@@ -1051,20 +998,20 @@ where T:Num+AsPrimitive<R>, R:'static+num_traits::Float {
 /* Convert degrees to radians */
 #[allow(dead_code)]
 fn deg2rad<R>(deg: R) -> R
-where R:'static+num_traits::Float+From<f64> {
+where R:'static+num_traits::Float+From<Float> {
     deg * (PI / 180.0).into()
 }
 
 /* convert radians to degrees */
 #[allow(dead_code)]
 fn rad2deg<R>(rad: R) -> R
-where R:'static+num_traits::Float+From<f64> {
+where R:'static+num_traits::Float+From<Float> {
     rad * (180.0 / PI).into()
 }
 
 /* convert hz to rad/s */
 #[allow(dead_code)]
 fn hz2rads<R>(hz: R) -> R
-where R:'static+num_traits::Float+From<f64> {
+where R:'static+num_traits::Float+From<Float> {
     hz * TAU.into()
 }

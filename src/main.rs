@@ -5,13 +5,17 @@ use std::path::Path;
 use std::env;
 use std::fs::File;
 use hound::{WavReader,WavWriter,read_wave_header};
-use buffers::{ChunkedSampler,write_buffer};
 
+use buffers::ChunkedSampler;
 use transforms::*;
 
-const BUFFER_CAP: usize = 2048;
+use crate::buffers::SampleConverter;
 
+const BUFFER_CAP: usize = 2048;
 const HELP: &str = "usage: audio [input wav] [output wav]";
+
+type Float: = f32; // type used for internal processing
+type Int = i16; // type of samples in wav file
 
 fn main() {
     // handle input args
@@ -35,12 +39,12 @@ fn main() {
         .expect("couldn't open file");
     let wavspec = wav_reader.spec();
     dbg!(&wavspec);
-    let mut sample_iter = wav_reader.samples::<i16>();
+    let mut wav_samples = wav_reader.samples::<Int>();
+    let samp_converter: SampleConverter<_, Float> = SampleConverter::new(&wav_samples);
     let mut sample_buffer = ChunkedSampler::new(
-        &mut sample_iter,
+        &mut wav_samples,
         BUFFER_CAP,
-        wavspec.channels,
-        wavspec.sample_rate
+        &wavspec
     );
 
     // initialize wav writer
@@ -52,21 +56,25 @@ fn main() {
     let buf = sample_buffer.next().expect("couldn't load buffer");
     let chunk1 = buf.data();
     let rms = chunk1.iter()
-        .fold(0, |acc, &x| acc + (x as i64).pow(2) as u64);
+        .fold(0.0_f64, |acc, &x| acc + (x*x) as f64);
     let rms = (rms as f64 / chunk1.len() as f64).sqrt();
     println!("BUFFER INFO:");
     println!("> buffer size: {}", chunk1.len());
     println!("> rms = {}", rms);
-    println!("> min = {}", chunk1.iter().min().unwrap());
-    println!("> max = {}", chunk1.iter().max().unwrap());
+    // println!("> min = {}", chunk1.iter().min().unwrap());
+    // println!("> max = {}", chunk1.iter().max().unwrap());
+    println!("> min = {}", chunk1.iter().fold(Float::INFINITY, |a, &b| a.min(b)));
+    println!("> max = {}", chunk1.iter().fold(Float::NEG_INFINITY, |a, &b| a.max(b)));
 
-    write_buffer(&mut writer, chunk1);
+    // write_buffer(&mut writer, &buf);
+    // sample_buffer.write_buffer(&mut writer, &buf);
+    samp_converter.write_buffer(&mut writer, buf.data());
 
     // let fs = wavspec.sample_rate as f64;
     let mut tf = Phaser::new(8, 0.0, 0.9, 0.9);
     for mut buf in sample_buffer {
         tf.transform(&mut buf);
-        write_buffer(&mut writer, buf.data());
+        samp_converter.write_buffer(&mut writer, buf.data());
     }
 
     writer.finalize().expect("Couldn't finalize output file");
