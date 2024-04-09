@@ -13,10 +13,9 @@ use num_traits::{Num, AsPrimitive, Zero};
 use itertools::{EitherOrBoth, Itertools};
 // local crates
 use crate::buffers::{SampleBuffer, ChannelCount};
-use crate::Float;
+use crate::{Float, CFloat};
 
 // type Int = i16; // default sample data type
-type CFloat = Complex<Float>;
 
 /* Transform an audio buffer
  * filter, pan, gain, whatever
@@ -270,17 +269,26 @@ impl Amp {
     pub fn new(gain: Float) -> Self {
         Self {gain}
     }
+
+    // invert signal polarity
+    pub fn inverter() -> Self {
+        Self { gain: -1.0 }
+    }
+
     pub fn db(db: Float) -> Self {
         let gain = Self::db2gain(db);
         Self {gain}
     }
+
     pub fn setgain(&mut self, gain: Float) {
         self.gain = gain;
     }
+
     pub fn setdb(&mut self, db: Float) {
         let gain = Self::db2gain(db);
         self.gain = gain;
     }
+
     fn db2gain(db: Float) -> Float{
         (10.0 as Float).powf(db / 20.0)
     }
