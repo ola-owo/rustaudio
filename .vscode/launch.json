@@ -4,7 +4,6 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
         {
             "type": "lldb",
             "request": "launch",
@@ -23,6 +22,27 @@
             "args": [
                 "data/bubbly2.wav",
                 "data/bubbly2-new.wav"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Test impulse response",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=audio",
+                    "--package=audio"
+                ],
+                "filter": {
+                    "name": "audio",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "data/delta.wav",
+                "data/delta-ir.wav"
             ],
             "cwd": "${workspaceFolder}"
         },
