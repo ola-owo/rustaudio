@@ -38,11 +38,11 @@ fn main() {
         .expect("Input is not a WAV file");
 
     // initialize reader
-    let path = Path::new(wav_file);
-    let mut wav_reader =  WavReader::open(path)
+    let wav_in_path = Path::new(wav_file);
+    let mut wav_reader =  WavReader::open(wav_in_path)
         .expect("couldn't open file");
     let wavspec = wav_reader.spec();
-    dbg!(&wavspec);
+    dbg!(wavspec);
     let mut wav_samples = wav_reader.samples::<Int>();
     let samp_converter: SampleConverter<_, Float> = SampleConverter::new(&wav_samples);
     // take only 10s of audio
@@ -78,7 +78,7 @@ fn main() {
 
     // plot spectrogram
     plot::spectrogram2d(
-        &Path::new("data").join("stft.png"),
+        &wav_in_path.with_extension("png"),
         &stft_data.slice_move(s![0,..,..]),
         wavspec.sample_rate
     ).unwrap();

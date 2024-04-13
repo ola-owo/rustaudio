@@ -6,7 +6,7 @@ use ndarray:: Array2;
 
 use crate::{buffers::SampleRate, Float};
 
-pub fn spectrogram2d(fname: &Path, arr: &Array2<Float>, fs: SampleRate) -> Result<(), Box<dyn std::error::Error>> {
+pub fn spectrogram2d<P: AsRef<Path>>(fname: &P, arr: &Array2<Float>, fs: SampleRate) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(fname, (1440, 1080))
         .into_drawing_area();
     root.fill(&WHITE)?;
@@ -60,7 +60,7 @@ pub fn spectrogram2d(fname: &Path, arr: &Array2<Float>, fs: SampleRate) -> Resul
     Ok(())
 }
 
-pub fn spectrogram3d(fname: &Path, arr: &Array2<Float>, fs: SampleRate) {
+pub fn spectrogram3d<P: AsRef<Path>>(fname: &P, arr: &Array2<Float>, fs: SampleRate) {
     let root = BitMapBackend::new(fname, (1440, 1080))
         .into_drawing_area();
     root.fill(&WHITE).expect("couldn't set background color");
