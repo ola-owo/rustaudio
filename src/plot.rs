@@ -1,19 +1,27 @@
-use std::path::Path;
+use std::f64::consts::PI;
+use std::ops::Mul;
+use std::{f64::consts::FRAC_1_PI, path::Path};
 use std::iter::repeat;
 
+use itertools::izip;
+use num_traits::AsPrimitive;
 use plotters::prelude::*;
-use ndarray:: Array2;
+use ndarray::{Array, Array1, Array2, Axis};
 
 use crate::{buffers::SampleRate, Float};
 
-pub fn spectrogram2d<P: AsRef<Path>>(fname: &P, arr: &Array2<Float>, fs: SampleRate) -> Result<(), Box<dyn std::error::Error>> {
+pub fn spectrogram<P: AsRef<Path>>(
+    fname: &P, arr: &Array2<Float>, fs: SampleRate, title: String
+) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(fname, (1440, 1080))
         .into_drawing_area();
-    root.fill(&WHITE)?;
+    // root.fill(&WHITE)?;
+    root.fill(&VulcanoHSL::get_color(0.0))?;
 
     // axis limits and step sizes
     let (ntimes, npts) = arr.dim();
-    let fstep = fs as f64 * 0.5 / npts as f64;
+    let fs = fs as f64;
+    let fstep = fs * 0.5 / npts as f64;
     let fvals = (0..npts)
         .map(|x| x as f64 * fstep)
         .collect::<Vec<_>>();
@@ -24,65 +32,102 @@ pub fn spectrogram2d<P: AsRef<Path>>(fname: &P, arr: &Array2<Float>, fs: SampleR
     let tstep = 1.0;
 
     let mut chart = ChartBuilder::on(&root)
-        .build_cartesian_2d(0.0..ntimes as f64, 0.0..(fs/2) as f64)?;
+        .caption(title, 40)
+        .set_label_area_size(LabelAreaPosition::Top, 40)
+        .set_label_area_size(LabelAreaPosition::Bottom, 60)
+        .set_label_area_size(LabelAreaPosition::Left, 60)
+        .build_cartesian_2d(0.0..ntimes as f64, 0.0..0.5*fs)?;
     chart
         .configure_mesh()
         .disable_mesh()
+        .x_desc("Time point")
+        .y_desc("Frequency (Hz)")
         .draw()?;
 
-    // let pts = (0..ntimes).map(|it| repeat(it).zip(0..npts))
-    //     .flatten()
-    //     .map(|(ixt,ixf)| {
-    //         let &t0 = tvals.get(ixt).unwrap();
-    //         let &f0 = fvals.get(ixf).unwrap();
-    //         let t1 = t0 + tstep;
-    //         let f1 = f0 + fstep;
-    //         let y = *arr.get((ixt, ixf)).unwrap() as f64;
-    //         [(t0,0.0,f0), (t1, y, f1)]
-    //     })
-    //     .collect::<Vec<_>>();
     chart.draw_series(
         (0..ntimes).map(|it| repeat(it).zip(0..npts))
             .flatten()
             .map(|(ixt,ixf)| {
-                let &t0 = tvals.get(ixt).unwrap();
-                let &f0 = fvals.get(ixf).unwrap();
-                let t1 = t0 + tstep;
-                let f1 = f0 + fstep;
-                let y = *arr.get((ixt, ixf)).unwrap() as f64;
-                Rectangle::new(
-                    [(t0, f0), (t1, f1)],
+                let t0 = tvals[ixt];
+                let f0 = fvals[ixf];
+                // let t1 = t0 + tstep;
+                // let f1 = f0 + fstep;
+                let y = arr[[ixt,ixf]];
+                // let y = y.atan() * 2.0 * FRAC_1_PI;
+                // let y = y.min(1.0);
+                // Rectangle::new(
+                //     [(t0, f0 + f64::MIN_POSITIVE), (t1, f1)],
+                //     VulcanoHSL::get_color(y)
+                // )
+                Pixel::new(
+                    (t0, f0 + f64::MIN_POSITIVE),
                     VulcanoHSL::get_color(y)
                 )
             })
     )?;
 
+    root.present()?;
     Ok(())
 }
 
-pub fn spectrogram3d<P: AsRef<Path>>(fname: &P, arr: &Array2<Float>, fs: SampleRate) {
-    let root = BitMapBackend::new(fname, (1440, 1080))
+pub fn spectrogram_log<P: AsRef<Path>>(
+    fname: &P, arr: &Array2<Float>, fvals: Vec<Float>, tvals: Vec<Float>, title: String
+) -> Result<(), Box<dyn std::error::Error>> {
+    const PAD_TOP: u32 = 40;
+    const PAD_BOTTOM: u32 = 60;
+    const PAD_LEFT: u32 = 60;
+    const PAD_RIGHT: u32 = 30;
+
+    let (ntimes, npts) = arr.dim();
+    let img_width = ntimes as u32 / 8 + PAD_LEFT;
+    let img_height = 15 * (npts as f64).log2().floor() as u32 + PAD_TOP + PAD_BOTTOM;
+
+    let root = BitMapBackend::new(fname, (img_width, img_height))
         .into_drawing_area();
-    root.fill(&WHITE).expect("couldn't set background color");
+    // root.fill(&WHITE)?;
+    root.fill(&VulcanoHSL::get_color(0.0))?;
 
     // axis limits and step sizes
-    let (ntimes, npts) = arr.dim();
-    let fstep = fs as f64 * 0.5 / npts as f64;
-    let fvals = (0..npts)
-        .map(|x| x as f64 * fstep)
-        .collect::<Vec<_>>();
-    // TODO: change tvals and tstep to seconds
-    let tvals: Vec<f64> = (0..ntimes)
-        .map(|x| x as f64)
-        .collect();
-    let tstep = 1.0;
+    // let fs = fs as f64;
+    // let fstep = fs * 0.5 / npts as f64;
+    // let fvals = (0..npts)
+    //     .map(|x| x as f64 * fstep)
+    //     .collect::<Vec<_>>();
+    // get log-spaced frequency values to show
+    let log_max = (npts as f64).log2().floor();
+    let fvals_log_ix = Array1::logspace(2.0, 1.0, log_max, log_max as usize);
+    let fvals_log_ix = fvals_log_ix.map(|x| x.round() as usize - 1);
+    let fvals_log = fvals_log_ix.map(|&i| fvals[i]); // log-spaced freq values
+    let fvals_log_len = fvals_log.len();
+    let npts_log_interp = 15 * fvals_log_len;
+    let fvals_log_interp = Array1::<f64>::geomspace(fvals_log[0].as_(), fvals_log[fvals_log_len-1].as_(), npts_log_interp).unwrap();
+
+    /*
+    0.5 -> stft overlap 
+    2*npts -> fft length (including negative freqs)
+    1/fs -> secs per sample
+    */
+    // let tstep = 0.5 * npts as f64 * 2.0 / fs;
+    // let tvals: Vec<_> = (0..ntimes)
+    //     .map(|x| x as f64 * tstep)
+    //     .collect();
+
 
     let mut chart = ChartBuilder::on(&root)
-        .build_cartesian_3d(0.0..ntimes as f64, 0.0..(fs/2) as f64, 0.0..1.0)
-        .expect("couldn't create chart context");
-    chart.configure_axes().draw().expect("couldn't draw axes");
+        .caption(title, 40)
+        .set_label_area_size(LabelAreaPosition::Top, PAD_TOP)
+        .set_label_area_size(LabelAreaPosition::Bottom, PAD_BOTTOM)
+        .set_label_area_size(LabelAreaPosition::Left, PAD_LEFT)
+        .set_label_area_size(LabelAreaPosition::Right, PAD_RIGHT)
+        .build_cartesian_2d(tvals[0]..tvals[tvals.len()-1], (fvals_log_interp[0]..fvals_log_interp[npts_log_interp-1]).log_scale())?;
+    chart
+        .configure_mesh()
+        .disable_mesh()
+        .x_desc("Time (secs)")
+        .y_desc("Frequency (Hz)")
+        .draw()?;
 
-    // let pts = (0..ntimes).map(|it| repeat(it).zip(0..npts))
+    // let pts = (0..ntimes).map(|it| repeat(it).zip(0..npts))          
     //     .flatten()
     //     .map(|(ixt,ixf)| {
     //         let &t0 = tvals.get(ixt).unwrap();
@@ -93,20 +138,85 @@ pub fn spectrogram3d<P: AsRef<Path>>(fname: &P, arr: &Array2<Float>, fs: SampleR
     //         [(t0,0.0,f0), (t1, y, f1)]
     //     })
     //     .collect::<Vec<_>>();
+
+    // chart.draw_series(
+    //     (0..ntimes).map(|it| repeat(it).zip(fvals_log_ix.iter()))
+    //         .flatten()
+    //         .map(|(ixt, &ixf)| {
+    //             let &t0 = tvals.get(ixt).unwrap();
+    //             let &f0 = fvals.get(ixf).unwrap();
+    //             // let t1 = t0 + tstep;
+    //             // let f1 = f0 + fstep;
+    //             let y = *arr.get((ixt, ixf)).unwrap() as f64;
+    //             // Rectangle::new(
+    //             //     [(t0, f0 + f64::MIN_POSITIVE), (t1, f1)],
+    //             //     VulcanoHSL::get_color(y)
+    //             // )
+    //             Pixel::new(
+    //                 (t0, f0),
+    //                 VulcanoHSL::get_color(y)
+    //             )
+    //         })
+    // )?;
     chart.draw_series(
-        (0..ntimes).map(|it| repeat(it).zip(0..npts))
-            .flatten()
-            .map(|(ixt,ixf)| {
-                let &t0 = tvals.get(ixt).unwrap();
-                let &f0 = fvals.get(ixf).unwrap();
-                let t1 = t0 + tstep;
-                let f1 = f0 + fstep;
-                let y = *arr.get((ixt, ixf)).unwrap() as f64;
-                Cubiod::new(
-                    [(t0,0.0,f0), (t1, y, f1)],
-                    BLUE.filled(),
-                    &BLACK
-                )
-            })
-    ).unwrap();
+        (0..ntimes).map(|i| {
+            let hvals = arr.index_axis(Axis(0), i); // frequency spectrum H[f] at time i
+            let hvals_logsp = fvals_log_ix.map(|&i| hvals[i]); // log-spaced H[f] values
+            let mut hvals_logsp_interp = interp_sinc(hvals_logsp.as_slice().unwrap(), npts_log_interp);
+            for h in hvals_logsp_interp.iter_mut() {
+                *h = h.min(1.0);
+            }
+            let t = tvals[i];
+
+            // repeat(t).zip(0..npts_log_interp)
+            izip!(repeat(t), fvals_log_interp.iter(), hvals_logsp_interp)
+                .map(|(t, &f, h)| {
+                    // let &t0 = tvals.get(ixt).unwrap();
+                    // let &f0 = fvals.get(ixf).unwrap();
+                    // Rectangle::new(
+                    //     [(t0, f0 + f64::MIN_POSITIVE), (t1, f1)],
+                    //     VulcanoHSL::get_color(y)
+                    // )
+                    Pixel::new((t, f), VulcanoHSL::get_color(h))
+                })
+        }).flatten()
+    )?;
+
+    root.present()?;
+    Ok(())
+}
+
+/* Sinc interpolation
+ *
+ * BORING MATH
+ * x(t) = sum_{n: -inf->inf} [x[n] * sinc((t - nT)/T)]
+ * substitute t=mT2:
+ * x[mT2] = sum_n{ x[n] * sinc((mT2 - nT) / T) }
+ *        = sum_n{ x[n] * sinc(m(T2/T) - n) }
+ */
+fn interp_sinc<T>(v_in: &[T], n_out: usize) -> Vec<T>
+where T: 'static+num_traits::Float+AsPrimitive<f64>,
+for<'a> &'a T: Mul<T, Output=T>,
+f64: AsPrimitive<T> {
+    let n_in = v_in.len();
+    let t2_t1 = (n_in - 1) as f64 / (n_out - 1) as f64; // ratio of T2/T1
+
+    (0..n_out)
+        .map(|m| {
+            repeat(m).zip(v_in.iter().enumerate())
+            .map(|(m,(n,xn))| xn.as_() * sinc::<f64>(m as f64 * t2_t1 - n as f64))
+            .sum::<f64>()
+            .as_()
+    }).collect()
+}
+
+// normalized sinc function sin(pi x) / (pi x)
+fn sinc<T>(x: T) -> T
+where T: 'static+num_traits::Float, f64: AsPrimitive<T> {
+    if x == 0.0.as_() {
+        1.0.as_()
+    } else {
+        let pix = x * PI.as_();
+        pix.sin() / pix
+    }
 }

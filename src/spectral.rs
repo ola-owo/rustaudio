@@ -2,9 +2,9 @@ use std::marker::PhantomData;
 use std::{iter::zip, sync::Arc};
 use std::mem;
 
-use crate::buffers::{ChannelCount, BufferSampler, SampleBuffer};
+use crate::buffers::{BufferSampler, SampleBuffer};
 use rustfft::{num_complex::Complex, Fft, FftNum, FftPlanner};
-use ndarray::{s, Array, Array2, Array3, Axis};
+use ndarray::{s, Array2, Array3, Axis};
 
 use crate::Float;
 
@@ -12,7 +12,7 @@ use crate::Float;
  * Similar to Transform but without modifying the signal.
  */
 pub trait Monitor {
-    fn transform(&mut self, buf: &SampleBuffer<Float>);
+    fn monitor(&mut self, buf: &SampleBuffer<Float>);
     fn reset(&mut self);
 }
 

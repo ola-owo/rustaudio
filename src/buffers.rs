@@ -51,7 +51,7 @@ pub trait BufferSampler<S>: Iterator<Item = SampleBuffer<S>> {
  */
 pub struct ChunkSampler<'wr,R,S,F> {
     sample_iter: &'wr mut WavSamples<'wr,R,S>,
-    buffer_cap: usize,
+    buffer_size: usize,
     wavspec: &'wr WavSpec,
     float_type: PhantomData<F>,
     samp_type: PhantomData<S>
@@ -61,13 +61,13 @@ impl<'wr,R,S,F> ChunkSampler<'wr,R,S,F>
 where R:Read, S:'static+Sample+Copy, F: AsPrimitive<S> {
     pub fn new(
         sample_iter: &'wr mut WavSamples<'wr,R,S>,
-        buffer_cap: usize,
+        buffer_size: usize,
         wavspec: &'wr WavSpec
     ) -> Self {
-        assert!(buffer_cap > 0);
+        assert!(buffer_size > 0);
         Self {
             sample_iter,
-            buffer_cap,
+            buffer_size,
             wavspec,
             float_type: PhantomData,
             samp_type: PhantomData
@@ -82,11 +82,11 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
     }
 
     fn nsamp(&self) -> usize {
-        self.buffer_cap / self.wavspec.channels as usize
+        self.buffer_size / self.wavspec.channels as usize
     }
 
     fn buffer_size(&self) -> usize {
-        self.buffer_cap
+        self.buffer_size
     }
 }
 
@@ -94,9 +94,9 @@ impl<'wr,R,S,F> Iterator for ChunkSampler<'wr,R,S,F>
 where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
     type Item = SampleBuffer<F>;
     fn next(&mut self) -> Option<Self::Item> {
-        let mut vec = Vec::with_capacity(self.buffer_cap);
+        let mut vec = Vec::with_capacity(self.buffer_size);
         let mut sample: S;
-        for _ in 0..self.buffer_cap {
+        for _ in 0..self.buffer_size {
             if let Some(res) = self.sample_iter.next() {
                 sample = res.expect("error while reading sample");
                 vec.push(sample.as_());
@@ -112,7 +112,7 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.sample_iter.len().div_ceil(self.buffer_cap);
+        let len = self.sample_iter.len().div_ceil(self.buffer_size);
         (len, Some(len))
     }
 }
@@ -127,7 +127,7 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {}
 pub struct OverlapSampler<'wr,R,S,F> {
     sample_iter: &'wr mut WavSamples<'wr,R,S>,
     is_empty: bool,
-    buffer_cap: usize,
+    buffer_size: usize,
     step_size: usize,
     last_chunk: Vec<F>,
     wavspec: &'wr WavSpec,
@@ -139,23 +139,31 @@ impl<'wr,R,S,F> OverlapSampler<'wr,R,S,F>
 where R:Read, S:'static+Sample+Copy, F: AsPrimitive<S> {
     pub fn new(
         sample_iter: &'wr mut WavSamples<'wr,R,S>,
-        buffer_cap: usize,
+        buffer_size: usize,
         step_size: usize,
         wavspec: &'wr WavSpec
     ) -> Self {
-        assert!(step_size > 0 && step_size <= buffer_cap, "step size must be in range [1, buffer_cap]");
-        let last_chunk = Vec::with_capacity(buffer_cap - step_size);
+        assert!(step_size > 0 && step_size <= buffer_size, "step size must be in range [1, buffer_size]");
+        let last_chunk = Vec::with_capacity(buffer_size - step_size);
 
         Self {
             sample_iter,
             is_empty: false,
-            buffer_cap,
+            buffer_size,
             step_size,
             last_chunk,
             wavspec,
             float_type: PhantomData,
             samp_type: PhantomData
         }
+    }
+
+    pub fn step_size(&self) -> usize {
+        self.step_size
+    }
+
+    pub fn wavspec(&self) -> &WavSpec {
+        &self.wavspec
     }
 }
 
@@ -166,11 +174,11 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
     }
 
     fn nsamp(&self) -> usize {
-        self.buffer_cap / self.wavspec.channels as usize
+        self.buffer_size / self.wavspec.channels as usize
     }
 
     fn buffer_size(&self) -> usize {
-        self.buffer_cap
+        self.buffer_size
     }
 }
 
@@ -185,8 +193,8 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
             return None
         }
         
-        let samps_to_load = self.buffer_cap - self.last_chunk.len();
-        let mut vec = Vec::with_capacity(self.buffer_cap);
+        let samps_to_load = self.buffer_size - self.last_chunk.len();
+        let mut vec = Vec::with_capacity(self.buffer_size);
         vec.extend(self.last_chunk.drain(0..));
 
         for _ in 0..samps_to_load {
@@ -201,7 +209,7 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
 
         // if wavsamples is exhausted, pad the buffer with 0s and don't fill last_chunk
         if self.is_empty {
-            for _ in 0..(self.buffer_cap - vec.len()) {
+            for _ in 0..(self.buffer_size - vec.len()) {
                 vec.push(F::zero());
             }
         } else {
@@ -214,7 +222,7 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
     fn size_hint(&self) -> (usize, Option<usize>) {
         // 1st chunk takes BUFFER CAP samples,
         // all remaining samples take STEP_SIZE samples
-        let len = (self.sample_iter.len() - self.buffer_cap)
+        let len = (self.sample_iter.len() - self.buffer_size)
             .div_ceil(self.step_size)
             + 2;
         (len, Some(len))
