@@ -43,7 +43,7 @@ fn main() {
     let wavspec = wav_reader.spec();
     dbg!(&wavspec);
     let mut wav_samples = wav_reader.samples::<Int>();
-    let samp_converter: SampleConverter<_, Float> = SampleConverter::new(&wav_samples);
+    // let samp_converter: SampleConverter<_, Float> = SampleConverter::new(&wav_samples);
     let n_chunks = (30.0 * wavspec.sample_rate as f64 / BUFFER_CAP as f64) as usize;
     let sample_buffer: OverlapSampler<'_, _, _, Float> = OverlapSampler::new(
         &mut wav_samples,

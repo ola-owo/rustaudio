@@ -911,7 +911,7 @@ impl Phaser {
      * angle [deg]: phase angle
      * rval[0 to 1]: pole magnitude (smaller = sharper phase-warp)
      */
-    pub fn new(n: u32, angle: Float, rval: Float, wetness: Float) -> Self {
+    pub fn new(n: u32, rval: Float, wetness: Float) -> Self {
         assert!(rval > 0.0, "pole magnitude must be positive");
         assert!(rval < 1.0, "pole magnitude > 1 is unstable");
 

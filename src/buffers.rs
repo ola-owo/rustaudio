@@ -7,29 +7,37 @@ pub type ChannelCount = u16;
 pub type SampleRate = u32;
 
 // Converter between wav sample type (usually i16) and SampleBuffer type (float)
-pub struct SampleConverter<S,F> {
-    samp_type: PhantomData<S>,
-    float_type: PhantomData<F>
-}
+// pub struct SampleConverter<S,F> {
+//     samp_type: PhantomData<S>,
+//     float_type: PhantomData<F>
+// }
 
-impl<S,F> SampleConverter<S,F>
+// impl<S,F> SampleConverter<S,F>
+// where F: Float+AsPrimitive<S>, S:'static+Sample+Copy+AsPrimitive<F> {
+//     pub fn new<'wr,R>(_wav_samples: &WavSamples<'wr,R,S>) -> Self {
+//         Self {
+//             samp_type: PhantomData::<S>,
+//             float_type: PhantomData::<F>
+//         }
+//     }
+
+//     // pub fn vec_to_float(v: &Vec<S>) -> Vec<F> {
+//     //     v.iter().map(|x| {x.as_()}).collect()
+//     // }
+
+//     // pub fn vec_to_samp(v: &Vec<F>) -> Vec<S> {
+//     //     v.iter().map(|x| {x.as_()}).collect()
+//     // }
+
+//     pub fn write_buffer<W: Write+Seek>(&self, writer: &mut WavWriter<W>, buf: &Vec<F>) {
+//         for s in buf.iter() {
+//             writer.write_sample(s.as_()).expect("failed to write buffer");
+//         }
+//     }
+// }
+pub trait SampleConverter<S,F>
 where F: Float+AsPrimitive<S>, S:'static+Sample+Copy+AsPrimitive<F> {
-    pub fn new<'wr,R>(_wav_samples: &WavSamples<'wr,R,S>) -> Self {
-        Self {
-            samp_type: PhantomData::<S>,
-            float_type: PhantomData::<F>
-        }
-    }
-
-    // pub fn vec_to_float(v: &Vec<S>) -> Vec<F> {
-    //     v.iter().map(|x| {x.as_()}).collect()
-    // }
-
-    // pub fn vec_to_samp(v: &Vec<F>) -> Vec<S> {
-    //     v.iter().map(|x| {x.as_()}).collect()
-    // }
-
-    pub fn write_buffer<W: Write+Seek>(&self, writer: &mut WavWriter<W>, buf: &Vec<F>) {
+    fn write_buffer<W: Write+Seek>(&self, writer: &mut WavWriter<W>, buf: &Vec<F>) {
         for s in buf.iter() {
             writer.write_sample(s.as_()).expect("failed to write buffer");
         }
