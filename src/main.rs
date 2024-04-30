@@ -2,6 +2,7 @@ mod transforms;
 mod buffers;
 mod spectral;
 mod plot;
+mod utils;
 
 use std::path::Path;
 use std::env;
@@ -9,17 +10,15 @@ use std::fs::File;
 
 use hound::{WavReader,read_wave_header};
 use ndarray::{s, Axis};
-use rustfft::num_complex::Complex;
 
-use buffers::{BufferSampler, OverlapSampler, SampleBuffer, SampleConverter};
+use buffers::{BufferSampler, OverlapSampler, SampleBuffer};
 use spectral::STFT;
+use utils::{Int, Float};
+
+use crate::transforms::*;
 
 const BUFFER_CAP: usize = 2048;
 const HELP: &str = "usage: audio [input wav]";
-
-type Float: = f32; // type used for internal processing
-type Int = i16; // type of samples in wav file
-type CFloat = Complex<Float>;
 
 fn main() {
     // handle input args
@@ -60,44 +59,49 @@ fn main() {
 
     // build stft array
     // also save time and freq step-sizes for later
-    let fs = wavspec.sample_rate as Float;
-    let tstep = sample_buffer.step_size() as Float / fs;
-    let fstep = fs as Float / sample_buffer.buffer_size() as Float;
-    let mut stft = STFT::new(&sample_buffer);
-    let stft_data_raw = stft.build(sample_buffer);
+    // let fs = wavspec.sample_rate as Float;
+    // let tstep = sample_buffer.step_size() as Float / fs;
+    // let fstep = fs as Float / sample_buffer.buffer_size() as Float;
+    // let mut stft = STFT::new(&sample_buffer);
+    // let stft_data_raw = stft.build(sample_buffer);
 
     /* fix stft array:
     *   remove negative freq components
     *   get abs of each fft value
     *   normalize each channel so that max=1
     */
-    let npt = stft_data_raw.shape()[2];
-    let mut stft_data = stft_data_raw.slice_move(s![0, .., ..npt/2])
-    .mapv(|z| z.norm().log10());
-    for mut stft_data_ch in stft_data.axis_iter_mut(Axis(0)) {
-        let max = stft_data_ch.iter().fold(Float::NEG_INFINITY, |a, &b| a.max(b));
-        if max > 0.0 { // avoid dividing by 0
-            stft_data_ch.map_inplace(|x| {*x /= max});
-        }
-    }
+    // let npt = stft_data_raw.shape()[2];
+    // let mut stft_data = stft_data_raw.slice_move(s![0, .., ..npt/2])
+    // .mapv(|z| z.norm().log10());
+    // for mut stft_data_ch in stft_data.axis_iter_mut(Axis(0)) {
+    //     let max = stft_data_ch.iter().fold(Float::NEG_INFINITY, |a, &b| a.max(b));
+    //     if max > 0.0 { // avoid dividing by 0
+    //         stft_data_ch.map_inplace(|x| {*x /= max});
+    //     }
+    // }
 
     // get time and freq arrays
-    let (nts, npts) = stft_data.dim();
-    let tvals: Vec<_> = (0..nts)
-        .map(|x| x as Float * tstep)
-        .collect();
-    let fvals = (0..npts).map(|x| x as Float * fstep).collect();
+    // let (nts, npts) = stft_data.dim();
+    // let tvals: Vec<_> = (0..nts)
+    //     .map(|x| x as Float * tstep)
+    //     .collect();
+    // let fvals = (0..npts).map(|x| x as Float * fstep).collect();
 
     // plot spectrogram
-    let out_path = wav_in_path.with_extension("png");
-    plot::spectrogram_log(
-        &out_path,
-        &stft_data,
-        fvals,
-        tvals,
-        format!("Spectrogram of {}", wav_in_path.file_name().unwrap().to_str().unwrap())
-    ).unwrap();
-    println!("{} saved.", out_path.display());
+    // let out_path = wav_in_path.with_extension("png");
+    // plot::spectrogram_log(
+    //     &out_path,
+    //     &stft_data,
+    //     fvals,
+    //     tvals,
+    //     format!("Spectrogram of {}", wav_in_path.file_name().unwrap().to_str().unwrap())
+    // ).unwrap();
+    // println!("{} saved.", out_path.display());
+
+    let mut tf = Decimator::new(1025);
+    for mut buf in sample_buffer {
+        tf.transform(&mut buf);
+    }
 }
 
 // print summary stats

@@ -1,15 +1,15 @@
-use std::f64::consts::PI;
-use std::ops::Mul;
-use std::{f64::consts::FRAC_1_PI, path::Path};
+use std::path::Path;
 use std::iter::repeat;
 
 use itertools::izip;
 use num_traits::AsPrimitive;
+use ndarray::{Array1, Array2, Axis};
 use plotters::prelude::*;
-use ndarray::{Array, Array1, Array2, Axis};
 
-use crate::{buffers::SampleRate, Float};
+use crate::buffers::SampleRate;
+use crate::utils::{Float, interp_sinc};
 
+#[allow(dead_code)]
 pub fn spectrogram<P: AsRef<Path>>(
     fname: &P, arr: &Array2<Float>, fs: SampleRate, title: String
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -29,7 +29,6 @@ pub fn spectrogram<P: AsRef<Path>>(
     let tvals: Vec<f64> = (0..ntimes)
         .map(|x| x as f64)
         .collect();
-    let tstep = 1.0;
 
     let mut chart = ChartBuilder::on(&root)
         .caption(title, 40)
@@ -184,39 +183,4 @@ pub fn spectrogram_log<P: AsRef<Path>>(
 
     root.present()?;
     Ok(())
-}
-
-/* Sinc interpolation
- *
- * BORING MATH
- * x(t) = sum_{n: -inf->inf} [x[n] * sinc((t - nT)/T)]
- * substitute t=mT2:
- * x[mT2] = sum_n{ x[n] * sinc((mT2 - nT) / T) }
- *        = sum_n{ x[n] * sinc(m(T2/T) - n) }
- */
-fn interp_sinc<T>(v_in: &[T], n_out: usize) -> Vec<T>
-where T: 'static+num_traits::Float+AsPrimitive<f64>,
-for<'a> &'a T: Mul<T, Output=T>,
-f64: AsPrimitive<T> {
-    let n_in = v_in.len();
-    let t2_t1 = (n_in - 1) as f64 / (n_out - 1) as f64; // ratio of T2/T1
-
-    (0..n_out)
-        .map(|m| {
-            repeat(m).zip(v_in.iter().enumerate())
-            .map(|(m,(n,xn))| xn.as_() * sinc::<f64>(m as f64 * t2_t1 - n as f64))
-            .sum::<f64>()
-            .as_()
-    }).collect()
-}
-
-// normalized sinc function sin(pi x) / (pi x)
-fn sinc<T>(x: T) -> T
-where T: 'static+num_traits::Float, f64: AsPrimitive<T> {
-    if x == 0.0.as_() {
-        1.0.as_()
-    } else {
-        let pix = x * PI.as_();
-        pix.sin() / pix
-    }
 }

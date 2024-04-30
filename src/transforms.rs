@@ -1,19 +1,14 @@
+#![allow(dead_code)]
 // std lib imports
 use std::f32::consts::*;
-// use std::f64::consts::PI as PI64;
-// use std::f64::consts::TAU as TAU64;
-// use std::f64::consts::FRAC_1_PI as FRAC_1_PI64;
-// use std::f64::consts::SQRT_2 as SQRT_2_64;
 use std::collections::VecDeque;
 use std::iter::zip;
-use std::ops::{Add, Mul, AddAssign};
+use std::ops::Add;
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
-use num_traits::{Num, AsPrimitive, Zero};
-use itertools::{EitherOrBoth, Itertools};
 // local crates
 use crate::buffers::{SampleBuffer, ChannelCount};
-use crate::{Float, CFloat};
+use crate::utils::*;
 
 // type Int = i16; // default sample data type
 
@@ -941,85 +936,76 @@ impl Transform for Phaser {
     }
 }
 
-/////////////////////////////
-// Random helper functions //
-/////////////////////////////
-
-/* Add 2 vectors together
- * Output vec length is the max length of either input 
- */
-fn vec_add<T>(v1: &Vec<T>, v2: &Vec<T>) -> Vec<T>
-where T: Add<Output=T> + Copy {
-    v1.iter().zip_longest(v2.iter())
-        .map(|it| match it {
-            EitherOrBoth::Both(a,b) => *a + *b,
-            EitherOrBoth::Left(a) => *a,
-            EitherOrBoth::Right(b) => *b
-        })
-        .collect::<Vec<T>>()
+pub struct Decimator {
+    factor: u32,
+    remainder: usize
 }
 
-/* Multiply 2 polynomials (represented as vectors) together
- *
- * BORING MATH:
- * To multiply polynomials, multiply coefficient pairs between v1 and v2. 
- * v_out[k] = v1[0]*v2[k] + v1[1]*v2[k-1] + ... + v1[k]*v2[0]
- */
-fn vec_mul<T>(v1: &Vec<T>, v2: &Vec<T>) -> Vec<T>
-where T: AddAssign + Mul<Output=T> + Zero + Copy {
-    let mut x1: &T;
-    let mut x2: &T;
-    let mut y: &mut T;
-    let mut vout = vec![T::zero(); v1.len() + v2.len()];
-    for i1 in 0..v1.len() {
-        x1 = v1.get(i1).unwrap();
-        for i2 in 0..v2.len() {
-            x2 = v2.get(i2).unwrap();
-
-            y = vout.get_mut(i1+i2).unwrap();
-            *y += *x1 * *x2;
-        }
+impl Decimator {
+    pub fn new(factor: u32) -> Self {
+        Self { factor, remainder: 0 }
     }
-    vout
 }
 
-/* Signal energy */
-#[allow(dead_code)]
-fn energy<T:Num+Copy>(vec: &Vec<T>) -> T {
-    vec
-        .iter()
-        .fold(T::zero(), |acc, &x| acc + x*x)
+impl Transform for Decimator {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+        let ch_size = buf.channels() as usize;
+        let chunk_len = self.factor as usize;
+        let chunk_sz = chunk_len * ch_size;
+
+        // fast-forward to beginning of next chunk
+        let n_skip_start = (chunk_len - self.remainder).rem_euclid(chunk_len) * ch_size;
+        // skip entire buffer, if needed
+        if n_skip_start >= buf.len() {
+            self.remainder += buf.len() / ch_size;
+            *buf.data_mut() = vec![];
+            return
+        }
+        let mut data = &buf.data()[n_skip_start..];
+
+        // buffer sizes
+        let buf_size = data.len();
+        let buf_len = buf_size / ch_size;
+        let n_chunks = buf_len / chunk_len;
+        
+        // if less than 1 full chunk exists, just take the 1st sample
+        if n_chunks == 0 {
+            self.remainder = buf_len;
+            *buf.data_mut() = data[..ch_size].into();
+            return
+        }
+        
+        // take the first [n_ch] out of every [factor] elements,
+        let mut data_new = Vec::with_capacity(n_chunks);
+        let mut chunk: &[Float];
+        for _i in 0..n_chunks {
+            (chunk, data) = data.split_at(chunk_sz);
+            data_new.extend_from_slice(&chunk[..ch_size]);
+        }
+
+        self.remainder = data.len() / ch_size;
+        *buf.data_mut() = data_new;
+    }
+
+    fn reset(&mut self) {
+        self.remainder = 0;
+    }
 }
 
-/* Root-mean-square average of a vector
-*
-* bound on T means that T is castable to R
-* bound on R means that R is a Float
-*/
-#[allow(dead_code)]
-fn rms<T,R>(vec: &Vec<T>) -> R
-where T:Num+AsPrimitive<R>, R:'static+num_traits::Float {
-    let e = energy(vec).as_();
-    e.sqrt()
+pub struct DownSampler {}
+
+impl DownSampler {
+    pub fn new() {
+        todo!()
+    }
 }
 
-/* Convert degrees to radians */
-#[allow(dead_code)]
-fn deg2rad<R>(deg: R) -> R
-where R:'static+num_traits::Float+From<Float> {
-    deg * (PI / 180.0).into()
-}
+impl Transform for DownSampler {
+    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+        todo!()
+    }
 
-/* convert radians to degrees */
-#[allow(dead_code)]
-fn rad2deg<R>(rad: R) -> R
-where R:'static+num_traits::Float+From<Float> {
-    rad * (180.0 / PI).into()
-}
-
-/* convert hz to rad/s */
-#[allow(dead_code)]
-fn hz2rads<R>(hz: R) -> R
-where R:'static+num_traits::Float+From<Float> {
-    hz * TAU.into()
+    fn reset(&mut self) {
+        todo!()
+    }
 }

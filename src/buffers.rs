@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::{io::{Read, Seek, Write}, marker::PhantomData};
 use hound::{Sample, WavSamples, WavSpec, WavWriter};
 use num_traits::{AsPrimitive,Float};
