@@ -7,7 +7,7 @@ use std::ops::Add;
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
 // local crates
-use crate::buffers::{SampleBuffer, ChannelCount};
+use crate::buffers::{ChannelCount, SampleBuffer, SampleRate};
 use crate::utils::*;
 
 // type Int = i16; // default sample data type
@@ -992,20 +992,46 @@ impl Transform for Decimator {
     }
 }
 
-pub struct DownSampler {}
+pub struct Resampler {
+    fs: Float
+}
 
-impl DownSampler {
-    pub fn new() {
-        todo!()
+impl Resampler {
+    pub fn new(fs: SampleRate) -> Self {
+        Self {fs: fs as Float}
     }
 }
 
-impl Transform for DownSampler {
+impl Transform for Resampler {
     fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
-        todo!()
+        let fs2_fs1 = self.fs / buf.fs() as Float;
+        let n_ch = buf.channels() as usize;
+        let n_in = buf.len() / n_ch;
+        let n_out = ((n_in as Float) * fs2_fs1).round() as usize;
+        let data = buf.data();
+
+        let mut data_new = vec![0.0; n_out * n_ch];
+        // let interp_channels = (0..n_ch).map(|c| {
+        for c in 0..n_ch {
+            // interpolate the single-channel signal
+            let data_ch = data.iter()
+                .skip(c).step_by(n_ch)
+                .map(|&x| x)
+                .collect::<Vec<_>>();
+            // copy interpolated samples into new buffer
+            for (i, &x) in interp_sinc(&data_ch[..], n_out).iter().enumerate() {
+                data_new[i*n_ch + c] = x;
+            }
+        }//).collect::<Vec<_>>();
+        *buf.data_mut() = data_new;
+
+        // let mut data_new = Vec::with_capacity(buf.len());
+        // for i in 0..n_in {
+        //     for c in 0..n_ch {
+        //         data_new.push(interp_channels[c][i]);
+        //     }
+        // }
     }
 
-    fn reset(&mut self) {
-        todo!()
-    }
+    fn reset(&mut self) {}
 }

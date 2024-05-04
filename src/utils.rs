@@ -98,7 +98,7 @@ where T: AddAssign + Mul<Output=T> + Zero + Copy {
  *        = sum_n{ x[n] * sinc(m(T2/T) - n) }
  */
 pub fn interp_sinc<T>(v_in: &[T], n_out: usize) -> Vec<T>
-where T: 'static+num_traits::Float+AsPrimitive<f64>,
+where T: 'static + num_traits::Float + AsPrimitive<f64>,
 for<'a> &'a T: Mul<T, Output=T>,
 f64: AsPrimitive<T> {
     let n_in = v_in.len();
