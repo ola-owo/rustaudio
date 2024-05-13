@@ -7,6 +7,8 @@ use itertools::{EitherOrBoth, Itertools};
 use rustfft::num_complex::Complex;
 use num_traits::{AsPrimitive, Num, Zero};
 
+use crate::buffers::SampleBuffer;
+
 pub type Float: = f32; // type used for internal processing
 pub type Int = i16; // type of samples in wav file
 pub type CFloat = Complex<Float>;
@@ -14,6 +16,19 @@ pub type CFloat = Complex<Float>;
 /////////////////////////////
 // Random helper functions //
 /////////////////////////////
+
+// print summary stats
+fn chunk_summary(buf: &SampleBuffer<Float>) {
+    let chunk1 = buf.data();
+    let rms = chunk1.iter()
+        .fold(0.0_f64, |acc, &x| acc + (x*x) as f64);
+    let rms = (rms as f64 / chunk1.len() as f64).sqrt();
+    println!("BUFFER INFO:");
+    println!("> buffer size: {}", chunk1.len());
+    println!("> rms = {}", rms);
+    println!("> min = {}", chunk1.iter().fold(Float::INFINITY, |a, &b| a.min(b)));
+    println!("> max = {}", chunk1.iter().fold(Float::NEG_INFINITY, |a, &b| a.max(b)));
+}
 
 /* Root-mean-square average of a vector
 *

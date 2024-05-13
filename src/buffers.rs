@@ -1,77 +1,104 @@
 #![allow(dead_code)]
 use std::{io::{Read, Seek, Write}, marker::PhantomData};
-use hound::{Sample, WavSamples, WavSpec, WavWriter};
+use hound::{Sample, WavReader, WavSamples, WavSpec, WavWriter};
 use num_traits::{AsPrimitive,Float};
 
 pub type ChannelCount = u16;
 pub type SampleRate = u32;
 
-// Converter between wav sample type (usually i16) and SampleBuffer type (float)
-// pub struct SampleConverter<S,F> {
-//     samp_type: PhantomData<S>,
-//     float_type: PhantomData<F>
-// }
+/* WavIO: WAV file interface
+ * 
+ * S: data type of samples in wav file
+ * F: internal float type
+ */
+pub struct WavIO<S,F> {
+    samp_type: PhantomData<S>,
+    float_type: PhantomData<F>
+}
 
-// impl<S,F> SampleConverter<S,F>
-// where F: Float+AsPrimitive<S>, S:'static+Sample+Copy+AsPrimitive<F> {
-//     pub fn new<'wr,R>(_wav_samples: &WavSamples<'wr,R,S>) -> Self {
-//         Self {
-//             samp_type: PhantomData::<S>,
-//             float_type: PhantomData::<F>
-//         }
-//     }
+impl<S,F> WavIO<S,F>
+where S:Sample+AsPrimitive<F>, F:Float+AsPrimitive<S> {
+    pub fn new() -> Self {
+        Self {
+            // wavspec,
+            samp_type: PhantomData,
+            // samp_type: wavspec.sample_format,
+            float_type: PhantomData
+        }
+    }
 
-//     // pub fn vec_to_float(v: &Vec<S>) -> Vec<F> {
-//     //     v.iter().map(|x| {x.as_()}).collect()
-//     // }
+    pub fn iter<'wr, R:Read>(
+        &self,
+        reader: &'wr mut WavReader<R>,
+        buf_sz: usize
+    ) -> ChunkSamples<'wr,R,S,F> {
+        let wavspec = reader.spec();
+        ChunkSamples::new(reader.samples::<S>(), buf_sz, wavspec)
+    }
 
-//     // pub fn vec_to_samp(v: &Vec<F>) -> Vec<S> {
-//     //     v.iter().map(|x| {x.as_()}).collect()
-//     // }
+    pub fn iter_overlap<'wr, R:Read>(
+        &self,
+        reader: &'wr mut WavReader<R>,
+        buf_sz: usize, step_sz: usize
+    ) -> OverlapSamples<'wr,R,S,F> {
+        let wavspec = reader.spec();
+        OverlapSamples::new(reader.samples::<S>(), buf_sz, step_sz, wavspec)
+    }
 
-//     pub fn write_buffer<W: Write+Seek>(&self, writer: &mut WavWriter<W>, buf: &Vec<F>) {
-//         for s in buf.iter() {
-//             writer.write_sample(s.as_()).expect("failed to write buffer");
-//         }
-//     }
-// }
-pub trait SampleConverter<S,F>
-where F: Float+AsPrimitive<S>, S:'static+Sample+Copy+AsPrimitive<F> {
-    fn write_buffer<W: Write+Seek>(&self, writer: &mut WavWriter<W>, buf: &Vec<F>) {
+    pub fn iter_jump<'wr, R:Read>(
+        &self,
+        reader: &'wr mut WavReader<R>,
+        buf_sz: usize, step_sz: usize
+    ) -> JumpSamples<'wr,R,S,F> {
+        let wavspec = reader.spec();
+        JumpSamples::new(reader.samples::<S>(), buf_sz, step_sz, wavspec)
+    }
+
+    pub fn write_buffer<W: Write+Seek>(
+        &self,
+        writer: &mut WavWriter<W>,
+        buf: &Vec<F>
+    ) {
         for s in buf.iter() {
             writer.write_sample(s.as_()).expect("failed to write buffer");
         }
     }
 }
 
-pub trait BufferSampler<S>: Iterator<Item = SampleBuffer<S>> {
-    // get number of channels
+
+/* BufferSamples is an iterator over SampleBuffers
+ */
+pub trait BufferSamples<S>: Iterator<Item = SampleBuffer<S>> {
+    // number of channels
     fn nch(&self) -> ChannelCount;
 
-    // get number of samples per channel
+    // number of samples per channel
     fn nsamp(&self) -> usize;
 
-    // get total size of sample buffer
+    // total size of sample buffer
     fn buffer_size(&self) -> usize;
+
+    // step size between buffers
+    fn step_size(&self) -> usize;
+
+    // underlying WavSpec
+    fn wavspec(&self) -> &WavSpec;
 }
 
-/* ChunkedSampler: wrapper around WavSamples that loads chunks of samples.
- * Can have any # of channels
+/* ChunkSamples: basic BufferSamples impl with no overlap between buffers
  */
-pub struct ChunkSampler<'wr,R,S,F> {
-    sample_iter: &'wr mut WavSamples<'wr,R,S>,
+pub struct ChunkSamples<'wr,R,S,F> {
+    sample_iter: WavSamples<'wr,R,S>,
     buffer_size: usize,
-    wavspec: &'wr WavSpec,
-    float_type: PhantomData<F>,
-    samp_type: PhantomData<S>
+    wavspec: WavSpec,
+    float_type: PhantomData<F>
 }
 
-impl<'wr,R,S,F> ChunkSampler<'wr,R,S,F>
-where R:Read, S:'static+Sample+Copy, F: AsPrimitive<S> {
-    pub fn new(
-        sample_iter: &'wr mut WavSamples<'wr,R,S>,
+impl<'wr,R,S,F> ChunkSamples<'wr,R,S,F> {
+    fn new(
+        sample_iter: WavSamples<'wr,R,S>,
         buffer_size: usize,
-        wavspec: &'wr WavSpec
+        wavspec: WavSpec
     ) -> Self {
         assert!(buffer_size > 0);
         Self {
@@ -79,13 +106,18 @@ where R:Read, S:'static+Sample+Copy, F: AsPrimitive<S> {
             buffer_size,
             wavspec,
             float_type: PhantomData,
-            samp_type: PhantomData
+            // samp_type: PhantomData
         }
     }
+
 }
 
-impl<'wr,R,S,F> BufferSampler<F> for ChunkSampler<'wr,R,S,F>
-where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
+impl<'wr,R:Read,S:Sample,F> BufferSamples<F> for ChunkSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {
+    fn wavspec(&self) -> &WavSpec {
+        &self.wavspec
+    }
+
     fn nch(&self) -> ChannelCount {
         self.wavspec.channels
     }
@@ -97,10 +129,14 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
     fn buffer_size(&self) -> usize {
         self.buffer_size
     }
+
+    fn step_size(&self) -> usize {
+        self.buffer_size
+    }
 }
 
-impl<'wr,R,S,F> Iterator for ChunkSampler<'wr,R,S,F>
-where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
+impl<'wr,R,S,F> Iterator for ChunkSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {
     type Item = SampleBuffer<F>;
     fn next(&mut self) -> Option<Self::Item> {
         let mut vec = Vec::with_capacity(self.buffer_size);
@@ -116,7 +152,7 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
         if vec.is_empty() {
             None
         } else {
-            Some(SampleBuffer::new(vec, self.wavspec))
+            Some(SampleBuffer::new(vec, &self.wavspec))
         }
     }
 
@@ -126,58 +162,45 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {
     }
 }
 
-impl<'wr,R,S,F> ExactSizeIterator for ChunkSampler<'wr,R,S,F>
-where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy {}
+impl<'wr,R,S,F> ExactSizeIterator for ChunkSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {}
 
-/*
- * OverlapSampler: wrapper around WavSamples that loads chunks of samples.
- * Similar to ChunkedSampler but with an overlapping window
+/* OverlapSamples: yields overlapping sample buffers
  */
-pub struct OverlapSampler<'wr,R,S,F> {
-    sample_iter: &'wr mut WavSamples<'wr,R,S>,
-    is_empty: bool,
+pub struct OverlapSamples<'wr,R,S,F> {
+    sample_iter: WavSamples<'wr,R,S>,
     buffer_size: usize,
     step_size: usize,
+    wavspec: WavSpec,
+    is_empty: bool,
     last_chunk: Vec<F>,
-    wavspec: &'wr WavSpec,
-    float_type: PhantomData<F>,
-    samp_type: PhantomData<S>
 }
 
-impl<'wr,R,S,F> OverlapSampler<'wr,R,S,F>
-where R:Read, S:'static+Sample+Copy, F: AsPrimitive<S> {
-    pub fn new(
-        sample_iter: &'wr mut WavSamples<'wr,R,S>,
+impl<'wr,R,S,F> OverlapSamples<'wr,R,S,F> {
+    fn new(
+        sample_iter: WavSamples<'wr,R,S>,
         buffer_size: usize,
         step_size: usize,
-        wavspec: &'wr WavSpec
+        wavspec: WavSpec
     ) -> Self {
         assert!(step_size > 0 && step_size <= buffer_size, "step size must be in range [1, buffer_size]");
-        let last_chunk = Vec::with_capacity(buffer_size - step_size);
-
         Self {
             sample_iter,
-            is_empty: false,
-            buffer_size,
             step_size,
-            last_chunk,
+            buffer_size,
             wavspec,
-            float_type: PhantomData,
-            samp_type: PhantomData
+            is_empty: false,
+            last_chunk: Vec::with_capacity(buffer_size - step_size)
         }
-    }
-
-    pub fn step_size(&self) -> usize {
-        self.step_size
-    }
-
-    pub fn wavspec(&self) -> &WavSpec {
-        &self.wavspec
     }
 }
 
-impl<'wr,R,S,F> BufferSampler<F> for OverlapSampler<'wr,R,S,F>
-where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
+impl<'wr,R:Read,S:Sample,F> BufferSamples<F> for OverlapSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {
+    fn wavspec(&self) -> &WavSpec {
+        &self.wavspec
+    }
+
     fn nch(&self) -> ChannelCount {
         self.wavspec.channels
     }
@@ -189,13 +212,16 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
     fn buffer_size(&self) -> usize {
         self.buffer_size
     }
+
+    fn step_size(&self) -> usize {
+        self.buffer_size
+    }
 }
 
-impl<'wr,R,S,F> Iterator for OverlapSampler<'wr,R,S,F>
-where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
+impl<'wr,R,S,F> Iterator for OverlapSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {
     type Item = SampleBuffer<F>;
     fn next(&mut self) -> Option<Self::Item> {
-        // println!("wavsamples remaining len = {}", self.sample_iter.len());
         let mut sample: S;
 
         if self.is_empty {
@@ -225,12 +251,12 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
             self.last_chunk.extend(&vec[self.step_size..]);
         }
 
-        Some(SampleBuffer::new(vec, self.wavspec))
+        Some(SampleBuffer::new(vec, &self.wavspec))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         // 1st chunk takes BUFFER CAP samples,
-        // all remaining samples take STEP_SIZE samples
+        // all remaining chunks take STEP_SIZE samples
         let len = (self.sample_iter.len() - self.buffer_size)
             .div_ceil(self.step_size)
             + 2;
@@ -238,8 +264,108 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {
     }
 }
 
-impl<'wr,R,S,F> ExactSizeIterator for OverlapSampler<'wr,R,S,F>
-where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {}
+impl<'wr,R,S,F> ExactSizeIterator for OverlapSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {}
+
+/* JumpSamples: yields overlapping sample buffers
+ */
+pub struct JumpSamples<'wr,R,S,F> {
+    sample_iter: WavSamples<'wr,R,S>,
+    buffer_size: usize,
+    step_size: usize,
+    wavspec: WavSpec,
+    is_empty: bool,
+    float_type: PhantomData<F>
+}
+
+impl<'wr,R,S,F> JumpSamples<'wr,R,S,F> {
+    fn new(
+        sample_iter: WavSamples<'wr,R,S>,
+        buffer_size: usize,
+        step_size: usize,
+        wavspec: WavSpec
+    ) -> Self {
+        assert!(step_size >= buffer_size, "step size must be in range [1, buffer_size]");
+        Self {
+            sample_iter,
+            step_size,
+            buffer_size,
+            wavspec,
+            is_empty: false,
+            float_type: PhantomData
+        }
+    }
+}
+
+impl<'wr,R:Read,S:Sample,F> BufferSamples<F> for JumpSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {
+    fn wavspec(&self) -> &WavSpec {
+        &self.wavspec
+    }
+
+    fn nch(&self) -> ChannelCount {
+        self.wavspec.channels
+    }
+
+    fn nsamp(&self) -> usize {
+        self.buffer_size / self.wavspec.channels as usize
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.buffer_size
+    }
+
+    fn step_size(&self) -> usize {
+        self.buffer_size
+    }
+}
+
+impl<'wr,R,S,F> Iterator for JumpSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {
+    type Item = SampleBuffer<F>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut sample: S;
+
+        if self.is_empty {
+            return None
+        }
+
+        // skip samples between chunks
+        let nskip = self.step_size - self.buffer_size;
+        for _ in 0..nskip.min(self.sample_iter.len()) {
+            self.sample_iter.next();
+        }
+
+        // get chunk data
+        let mut vec = Vec::with_capacity(self.buffer_size);
+        for _ in 0..self.buffer_size {
+            if let Some(res) = self.sample_iter.next() {
+                sample = res.expect("error while reading sample");
+                vec.push(sample.as_());
+            } else {
+                break // end of iterator
+            }
+        }
+        if vec.is_empty() {
+            None
+        } else {
+            Some(SampleBuffer::new(vec, &self.wavspec))
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // 1st chunk takes BUFFER CAP samples,
+        // all remaining chunks take STEP_SIZE samples
+        let len = (self.sample_iter.len() - self.buffer_size)
+            .div_ceil(self.step_size)
+            + 2;
+        (len, Some(len))
+    }
+}
+
+impl<'wr,R,S,F> ExactSizeIterator for JumpSamples<'wr,R,S,F>
+where R:Read, S:Sample+AsPrimitive<F>, F:'static+Float {}
+
 
 /* SampleBuffer: Represents a chunk of interleaved multichannel data
  * Data vector is owned by this object.
@@ -255,7 +381,6 @@ where R:Read, S:Sample+AsPrimitive<F>, F:'static+Copy+Float {}
 }
 
 impl<S> SampleBuffer<S> {
-    // constructor
     pub fn new(data: Vec<S>, wavspec: &WavSpec) -> Self {
         Self {
             data,

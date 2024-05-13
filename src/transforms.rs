@@ -1011,7 +1011,6 @@ impl Transform for Resampler {
         let data = buf.data();
 
         let mut data_new = vec![0.0; n_out * n_ch];
-        // let interp_channels = (0..n_ch).map(|c| {
         for c in 0..n_ch {
             // interpolate the single-channel signal
             let data_ch = data.iter()
@@ -1022,15 +1021,8 @@ impl Transform for Resampler {
             for (i, &x) in interp_sinc(&data_ch[..], n_out).iter().enumerate() {
                 data_new[i*n_ch + c] = x;
             }
-        }//).collect::<Vec<_>>();
+        }
         *buf.data_mut() = data_new;
-
-        // let mut data_new = Vec::with_capacity(buf.len());
-        // for i in 0..n_in {
-        //     for c in 0..n_ch {
-        //         data_new.push(interp_channels[c][i]);
-        //     }
-        // }
     }
 
     fn reset(&mut self) {}

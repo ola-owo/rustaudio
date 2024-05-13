@@ -69,6 +69,7 @@ pub fn spectrogram<P: AsRef<Path>>(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn spectrogram_log<P: AsRef<Path>>(
     fname: &P, arr: &Array2<Float>, fvals: Vec<Float>, tvals: Vec<Float>, title: String
 ) -> Result<(), Box<dyn std::error::Error>> {

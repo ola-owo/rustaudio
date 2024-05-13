@@ -1,8 +1,9 @@
 use std::marker::PhantomData;
+use std::path::Path;
 use std::{iter::zip, sync::Arc};
 use std::mem;
 
-use crate::buffers::{BufferSampler, SampleBuffer};
+use crate::buffers::{BufferSamples, SampleBuffer};
 use rustfft::{num_complex::Complex, Fft, FftNum, FftPlanner};
 use ndarray::{s, Array2, Array3, Axis};
 
@@ -55,7 +56,7 @@ impl<T: FftNum> FftBuf<T> {
 }
 
 pub struct STFT<T,C>
-where C: BufferSampler<T> + ExactSizeIterator {
+where C: BufferSamples<T> + ExactSizeIterator {
     data: Array3<Complex<T>>, // size = (n_ch, n_times, n_pts)
     // sampler: C,
     sampler: PhantomData<C>,
@@ -65,7 +66,7 @@ where C: BufferSampler<T> + ExactSizeIterator {
 }
 
 impl<T,C> STFT<T,C>
-where T: FftNum, C: BufferSampler<T> + ExactSizeIterator {
+where T: FftNum, C: BufferSamples<T> + ExactSizeIterator {
     fn new_arr(nch: usize, ntimes: usize, npt: usize) -> Array3<Complex<T>> {
         Array3::<Complex<T>>::zeros((nch, ntimes, npt))
     }
@@ -101,5 +102,51 @@ where T: FftNum, C: BufferSampler<T> + ExactSizeIterator {
         // return the stft array and replace self.data with an empty array
         let empty_arr = Self::new_arr(self.nch, self.ntimes, self.npt);
         mem::replace(&mut self.data, empty_arr)
+    }
+}
+
+struct STFTPlotData {
+    stft_data: Array2<Float>,
+    fvals: Vec<Float>,
+    tvals: Vec<Float>
+}
+
+fn write_stft<S,P: AsRef<Path>>(sampler:S, title: String, out_path: &P) -> STFTPlotData
+where S: BufferSamples<Float> + ExactSizeIterator {
+    // build stft array
+    // also save time and freq step-sizes for later
+    let wavspec = sampler.wavspec();
+    let fs = wavspec.sample_rate as Float;
+    let tstep = sampler.step_size() as Float / fs;
+    let fstep = fs as Float / sampler.buffer_size() as Float;
+    let mut stft = STFT::new(&sampler);
+    let stft_data_raw = stft.build(sampler);
+
+    /* fix stft array:
+     *   remove negative freq components
+     *   get abs of each fft value
+     *   normalize each channel so that max=1
+     */
+    let npt = stft_data_raw.shape()[2];
+    let mut stft_data = stft_data_raw.slice_move(s![0, .., ..npt/2])
+    .mapv(|z| z.norm().log10());
+    for mut stft_data_ch in stft_data.axis_iter_mut(Axis(0)) {
+        let max = stft_data_ch.iter().fold(Float::NEG_INFINITY, |a, &b| a.max(b));
+        if max > 0.0 { // avoid dividing by 0
+            stft_data_ch.map_inplace(|x| {*x /= max});
+        }
+    }
+
+    // get time and freq arrays
+    let (nts, npts) = stft_data.dim();
+    let tvals: Vec<_> = (0..nts)
+        .map(|x| x as Float * tstep)
+        .collect();
+    let fvals = (0..npts).map(|x| x as Float * fstep).collect();
+
+    STFTPlotData {
+        stft_data,
+        fvals,
+        tvals
     }
 }
