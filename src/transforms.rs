@@ -3,60 +3,59 @@
 use std::f32::consts::*;
 use std::collections::VecDeque;
 use std::iter::zip;
+use std::marker::PhantomData;
 use std::ops::Add;
+use num_traits::real::Real;
+use num_traits::{AsPrimitive, Zero};
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
 // local crates
 use crate::buffers::{ChannelCount, SampleBuffer, SampleRate};
 use crate::utils::*;
 
-// type Int = i16; // default sample data type
-
 /* Transform an audio buffer
  * filter, pan, gain, whatever
  * 
+ * transform() mutates a SampleBuffer in-place
  * reset() resets the transform's internal state
  */
-pub trait Transform {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>);
+pub trait Transform<S> {
+    fn transform(&mut self, buf: &mut SampleBuffer<S>);
+    // fn transform_copy(&mut self, buf: &SampleBuffer<S>) -> SampleBuffer<S>;
     fn reset(&mut self);
 }
 
 // Dummy transform that does nothing
 pub struct PassThrough;
 
-impl SingleTransform for PassThrough {}
-
-impl Transform for PassThrough {
+impl Transform<Float> for PassThrough {
     fn transform(&mut self, _buf: &mut SampleBuffer<Float>) {}
     fn reset(&mut self) {}
 }
 
 // trait describing compound transforms
+// TODO: put something useful here
 trait MultiTransform {}
 
-// trait describing single-struct transforms
-trait SingleTransform {}
-
 // Chain multiple transforms together
-pub struct Chain {
-    chain: Vec<Box<dyn Transform>>,
+pub struct Chain<S> {
+    chain: Vec<Box<dyn Transform<S>>>,
 }
 
-impl MultiTransform for Chain {}
+impl<S> MultiTransform for Chain<S> {}
 
-impl Chain {
+impl<S> Chain<S> {
     pub fn new() -> Self {
         Self {chain: vec![]}
     }
 
-    pub fn from(tf: impl Transform + 'static) -> Self {
+    pub fn from(tf: impl Transform<S> + 'static) -> Self {
         Self {chain: vec![Box::new(tf)]}
     }
 
-    // 'static bound requires input [tf] to be an owned type,
-    // which all Transform implementations are
-    pub fn push(mut self, tf: impl Transform + 'static) -> Self {
+    // 'static means tf is an owned type (not a ref),
+    // which is required for Box
+    pub fn push(mut self, tf: impl Transform<S> + 'static) -> Self {
         self.chain.push(Box::new(tf));
         self
     }
@@ -66,7 +65,7 @@ impl Chain {
     }
 
     // get a reference to the nth chain element
-    pub fn get(&self, n: usize) -> Option<&dyn Transform> {
+    pub fn get(&self, n: usize) -> Option<&dyn Transform<S>> {
         match self.chain.get(n) {
             Some(tf_box) => Some(tf_box.as_ref()),
             None => None
@@ -74,7 +73,7 @@ impl Chain {
     }
 
     // get a mutable reference to the nth chain element
-    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform> {
+    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform<S>> {
         match self.chain.get_mut(n) {
             Some(tf_box) => Some(tf_box.as_mut()),
             None => None
@@ -82,7 +81,7 @@ impl Chain {
     }
 
     // remove the nth chain element (panic if out of bounds)
-    pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform>> {
+    pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform<S>>> {
         if n >= self.chain.len() {
             None
         } else {
@@ -102,8 +101,8 @@ macro_rules! chain {
 }
 
 // Merge 2 Chains together into a single Chain
-impl Add for Chain {
-    type Output = Chain;
+impl<S> Add for Chain<S> {
+    type Output = Chain<S>;
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut chain = self.chain;
@@ -113,8 +112,8 @@ impl Add for Chain {
     }
 }
 
-impl Transform for Chain {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+impl<S> Transform<S> for Chain<S> {
+    fn transform(&mut self, buf: &mut SampleBuffer<S>) {
         for tf_box in self.chain.iter_mut() {
             tf_box.transform(buf);
         }
@@ -131,38 +130,26 @@ impl Transform for Chain {
  * 
  * all transforms are weighted equally (for now)
  */
-pub struct ParallelChain {
-    chain: Vec<Box<dyn Transform>>,
+pub struct ParallelChain<S> {
+    chain: Vec<Box<dyn Transform<S>>>,
 }
 
-impl MultiTransform for ParallelChain {}
+impl<S> MultiTransform for ParallelChain<S> {}
 
-impl ParallelChain {
+impl<S> ParallelChain<S> {
     pub fn new() -> Self {
         Self {chain: vec![]}
     }
 
-    pub fn from(tf: impl Transform + 'static) -> Self {
+    pub fn from(tf: impl Transform<S> + 'static) -> Self {
         Self {chain: vec![Box::new(tf)]}
     }
 
     // 'static bound requires input [tf] to be an owned type,
     // which all Transform implementations are
-    pub fn push(mut self, tf: impl Transform + 'static) -> Self {
+    pub fn push(mut self, tf: impl Transform<S> + 'static) -> Self {
         self.chain.push(Box::new(tf));
         self
-    }
-
-    /* Create a wet/dry mix
-     *
-     * Internally, combine tf (+amp) with PassThrough (+amp)
-     */
-    pub fn wetdry(tf: impl Transform + 'static, wetness: Float) -> Self {
-        assert!(wetness >= 0.0 && wetness <= 1.0, "wetness must be between 0 and 1");
-
-        let wet = chain!(tf, Amp::new(wetness));
-        let dry = Amp::new(1.0 - wetness);
-        ParallelChain::from(wet).push(dry)
     }
 
     pub fn len(&self) -> usize {
@@ -170,7 +157,7 @@ impl ParallelChain {
     }
 
     // get a reference to the nth chain element
-    pub fn get(&self, n: usize) -> Option<&dyn Transform> {
+    pub fn get(&self, n: usize) -> Option<&dyn Transform<S>> {
         match self.chain.get(n) {
             Some(tf_box) => Some(tf_box.as_ref()),
             None => None
@@ -178,7 +165,7 @@ impl ParallelChain {
     }
 
     // get a mutable reference to the nth chain element
-    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform> {
+    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform<S>> {
         match self.chain.get_mut(n) {
             Some(tf_box) => Some(tf_box.as_mut()),
             None => None
@@ -186,7 +173,7 @@ impl ParallelChain {
     }
 
     // remove the nth chain element (panic if out of bounds)
-    pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform>> {
+    pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform<S>>> {
         if n >= self.chain.len() {
             None
         } else {
@@ -195,9 +182,23 @@ impl ParallelChain {
     }
 }
 
+impl ParallelChain<Float> {
+    /* Create a wet/dry mix
+     *
+     * Internally, combine tf (+amp) with PassThrough (+amp)
+     */
+    pub fn wetdry(tf: impl Transform<Float> + 'static, wetness: Float) -> Self {
+        assert!(wetness >= 0.0 && wetness <= 1.0, "wetness must be between 0 and 1");
+
+        let wet = chain!(tf, Amp::new(wetness));
+        let dry = Amp::new(1.0 - wetness);
+        ParallelChain::from(wet).push(dry)
+    }
+}
+
 // Merge 2 ParallelChains together into a single ParallelChain
-impl Add for ParallelChain {
-    type Output = ParallelChain;
+impl<S> Add for ParallelChain<S> {
+    type Output = ParallelChain<S>;
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut chain = self.chain;
@@ -221,21 +222,18 @@ macro_rules! parallel_chain {
     };
 }
 
-impl Transform for ParallelChain {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+impl<S> Transform<S> for ParallelChain<S>
+where S: Copy+Zero {
+    fn transform(&mut self, buf: &mut SampleBuffer<S>) {
         // data_final = final data vector (as float)
-        let mut data_final = vec![0.0; buf.len()];
+        let mut data_final = vec![S::zero(); buf.len()];
 
         // run each transform, scale result, and add to data_final
-        let mut buf_copy: SampleBuffer<Float>;
+        let mut buf_copy: SampleBuffer<S>;
         for tf_box in self.chain.iter_mut() {
             buf_copy = buf.clone();
             tf_box.transform(&mut buf_copy);
-            let buf_final_iter = data_final.iter_mut();
-            let buf_part_iter = buf_copy.data().iter();
-            for (s_final, s_part) in std::iter::zip(buf_final_iter, buf_part_iter) {
-                *s_final += *s_part;
-            }
+            data_final = vec_add(&data_final, buf_copy.data());
         }
 
         // assign new data to buf
@@ -249,56 +247,57 @@ impl Transform for ParallelChain {
     }
 }
 
-/* Amp: scale signal up or down.
- */
-pub struct Amp {
+// Amp: scale signal up or down.
+pub struct Amp<S> {
     // here, gain is a multiplier
-    // dB change = 20 * log10(gain)
-    gain: Float
+    gain: Float,
+    stype: PhantomData<S>
 }
-
-impl SingleTransform for Amp {}
 
 #[allow(dead_code)]
-impl Amp {
+impl<S> Amp<S>
+where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
     pub fn new(gain: Float) -> Self {
-        Self {gain}
+        Self {gain, stype: PhantomData }
     }
-
+    
     // invert signal polarity
     pub fn inverter() -> Self {
-        Self { gain: -1.0 }
+        Self { gain: -1.0, stype: PhantomData }
     }
-
+    
+    // dB change = 20 * log10(gain)
     pub fn db(db: Float) -> Self {
         let gain = Self::db2gain(db);
-        Self {gain}
+        Self { gain, stype: PhantomData }
     }
 
-    pub fn setgain(&mut self, gain: Float) {
-        self.gain = gain;
-    }
-
-    pub fn setdb(&mut self, db: Float) {
-        let gain = Self::db2gain(db);
-        self.gain = gain;
-    }
-
-    fn db2gain(db: Float) -> Float{
-        (10.0 as Float).powf(db / 20.0)
+    fn db2gain(db: Float) -> Float {
+        10.0.powf(db / 20.0)
     }
 }
 
-impl Transform for Amp {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
-        let data = buf.data_mut();
-        *data = data.iter_mut()
-            .map(|x| *x * self.gain)
-            .collect::<Vec<_>>();
+impl<S> Transform<S> for Amp<S>
+where S: AsPrimitive<Float>, Float: AsPrimitive<S> {
+    fn transform(&mut self, buf: &mut SampleBuffer<S>) {
+        for samp in buf.data_mut().iter_mut() {
+            *samp = (samp.as_() * self.gain).as_();
+        }
     }
 
     fn reset(&mut self) {}
 }
+
+// impl<S> Transform<S> for Amp
+// where S: AsPrimitive<Float>, Float: AsPrimitive<S> {
+//     fn transform(&mut self, buf: &mut SampleBuffer<S>) {
+//         for samp in buf.data_mut().iter_mut() {
+//             *samp = (samp.as_() * self.gain).as_();
+//         }
+//     }
+
+//     fn reset(&mut self) {}
+// }
 
 /* Conv1d: Convolve signal with a kernel.
  * This can model any linear filter
@@ -307,8 +306,6 @@ pub struct Conv1d {
     kernel: Vec<Float>,
     lastchunk: Vec<Float>
 }
-
-impl SingleTransform for Conv1d {}
 
 #[allow(dead_code)]
 impl Conv1d {
@@ -492,7 +489,7 @@ impl Conv1d {
     }
 }
 
-impl Transform for Conv1d {
+impl Transform<Float> for Conv1d {
     // apply (causal) filter to buffer,
     // this will delay signal by k-1 samples
     fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
@@ -569,8 +566,6 @@ pub struct DiffEq {
     yvals: Vec<VecDeque<Float>>, // cached y-values
     chcount: ChannelCount          // number of channels
 }
-
-impl SingleTransform for DiffEq {}
 
 /* build a linear Transform from transfer function coefficients
  *
@@ -752,7 +747,7 @@ impl From<Conv1d> for DiffEq {
     }
 }
 
-impl Transform for DiffEq {
+impl Transform<Float> for DiffEq {
     fn reset(&mut self) {
         self.xvals.clear();
         self.yvals.clear();
@@ -818,9 +813,7 @@ impl Transform for DiffEq {
  */
 pub struct ToMono;
 
-impl SingleTransform for ToMono {}
-
-impl Transform for ToMono {
+impl Transform<Float> for ToMono {
     fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         let numch = buf.channels();
         let data = buf.data_mut();
@@ -840,8 +833,6 @@ pub struct Pan {
     left_wt: [Float; 2],
     right_wt: [Float; 2]
 }
-
-impl SingleTransform for Pan {}
 
 impl Pan {
     /*
@@ -875,7 +866,7 @@ impl Pan {
     }
 }
 
-impl Transform for Pan {
+impl Transform<Float> for Pan {
     fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         let numch = buf.channels();
         assert!(numch == 2, "Sample buffer must be stereo");
@@ -899,7 +890,7 @@ impl Transform for Pan {
  * Internally, this is a ParallelChain of DiffEq and Passthrough
  */
 pub struct Phaser {
-    chain: ParallelChain
+    chain: ParallelChain<Float>
 }
 
 impl MultiTransform for Phaser {}
@@ -926,7 +917,7 @@ impl Phaser {
     }
 }
 
-impl Transform for Phaser {
+impl Transform<Float> for Phaser {
     fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         self.chain.transform(buf);
     }
@@ -947,17 +938,17 @@ impl Decimator {
     }
 }
 
-impl Transform for Decimator {
+impl Transform<Float> for Decimator {
     fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
-        let ch_size = buf.channels() as usize;
+        let n_ch = buf.channels() as usize;
         let chunk_len = self.factor as usize;
-        let chunk_sz = chunk_len * ch_size;
+        let chunk_sz = chunk_len * n_ch;
 
         // fast-forward to beginning of next chunk
-        let n_skip_start = (chunk_len - self.remainder).rem_euclid(chunk_len) * ch_size;
+        let n_skip_start = (chunk_len - self.remainder).rem_euclid(chunk_len) * n_ch;
         // skip entire buffer, if needed
         if n_skip_start >= buf.len() {
-            self.remainder += buf.len() / ch_size;
+            self.remainder += buf.len() / n_ch;
             *buf.data_mut() = vec![];
             return
         }
@@ -965,13 +956,13 @@ impl Transform for Decimator {
 
         // buffer sizes
         let buf_size = data.len();
-        let buf_len = buf_size / ch_size;
+        let buf_len = buf_size / n_ch;
         let n_chunks = buf_len / chunk_len;
         
         // if less than 1 full chunk exists, just take the 1st sample
         if n_chunks == 0 {
             self.remainder = buf_len;
-            *buf.data_mut() = data[..ch_size].into();
+            *buf.data_mut() = data[..n_ch].into();
             return
         }
         
@@ -980,10 +971,10 @@ impl Transform for Decimator {
         let mut chunk: &[Float];
         for _i in 0..n_chunks {
             (chunk, data) = data.split_at(chunk_sz);
-            data_new.extend_from_slice(&chunk[..ch_size]);
+            data_new.extend_from_slice(&chunk[..n_ch]);
         }
 
-        self.remainder = data.len() / ch_size;
+        self.remainder = data.len() / n_ch;
         *buf.data_mut() = data_new;
     }
 
@@ -1002,7 +993,7 @@ impl Resampler {
     }
 }
 
-impl Transform for Resampler {
+impl Transform<Float> for Resampler {
     fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
         let fs2_fs1 = self.fs / buf.fs() as Float;
         let n_ch = buf.channels() as usize;

@@ -20,9 +20,7 @@ impl<S,F> WavIO<S,F>
 where S:Sample+AsPrimitive<F>, F:Float+AsPrimitive<S> {
     pub fn new() -> Self {
         Self {
-            // wavspec,
             samp_type: PhantomData,
-            // samp_type: wavspec.sample_format,
             float_type: PhantomData
         }
     }
@@ -60,14 +58,13 @@ where S:Sample+AsPrimitive<F>, F:Float+AsPrimitive<S> {
         buf: &Vec<F>
     ) {
         for s in buf.iter() {
-            writer.write_sample(s.as_()).expect("failed to write buffer");
+            writer.write_sample(s.round().as_()).expect("failed to write buffer");
         }
     }
 }
 
 
-/* BufferSamples is an iterator over SampleBuffers
- */
+// BufferSamples is an iterator over SampleBuffers
 pub trait BufferSamples<S>: Iterator<Item = SampleBuffer<S>> {
     // number of channels
     fn nch(&self) -> ChannelCount;
