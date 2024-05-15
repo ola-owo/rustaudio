@@ -66,6 +66,16 @@ where R:'static+num_traits::Float+From<Float> {
     hz * TAU.into()
 }
 
+/* Multiple a vector by a scalar
+ * Output vec length is the max length of either input 
+ */
+pub fn vec_scale<T>(v: &Vec<T>, k: T) -> Vec<T>
+where T: Copy+Mul<T, Output=T> {
+    v.iter()
+        .map(|&x| x*k)
+        .collect::<Vec<_>>()
+}
+
 /* Add 2 vectors together
  * Output vec length is the max length of either input 
  */

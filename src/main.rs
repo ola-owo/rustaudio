@@ -51,7 +51,7 @@ fn main() {
     // let mut tf = Resampler::new(24000);
     let mut tf = Decimator::new(2);
     for mut buf in sampler {
-        tf.transform(&mut buf);
+        buf = tf.transform(buf);
         wav.write_buffer(&mut writer, buf.data());
     }
 }

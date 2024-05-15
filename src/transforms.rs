@@ -4,7 +4,7 @@ use std::f32::consts::*;
 use std::collections::VecDeque;
 use std::iter::zip;
 use std::marker::PhantomData;
-use std::ops::Add;
+use std::ops::{Add, Mul};
 use num_traits::real::Real;
 use num_traits::{AsPrimitive, Zero};
 // external crates
@@ -20,16 +20,17 @@ use crate::utils::*;
  * reset() resets the transform's internal state
  */
 pub trait Transform<S> {
-    fn transform(&mut self, buf: &mut SampleBuffer<S>);
-    // fn transform_copy(&mut self, buf: &SampleBuffer<S>) -> SampleBuffer<S>;
+    fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S>;
+    // fn transform_inplace(&mut self, buf: &mut SampleBuffer<S>);
+    // fn transform_borrow(&mut self, buf: &SampleBuffer<S>) -> SampleBuffer<S>;
     fn reset(&mut self);
 }
 
 // Dummy transform that does nothing
 pub struct PassThrough;
 
-impl Transform<Float> for PassThrough {
-    fn transform(&mut self, _buf: &mut SampleBuffer<Float>) {}
+impl<S> Transform<S> for PassThrough {
+    fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> { buf }
     fn reset(&mut self) {}
 }
 
@@ -113,10 +114,12 @@ impl<S> Add for Chain<S> {
 }
 
 impl<S> Transform<S> for Chain<S> {
-    fn transform(&mut self, buf: &mut SampleBuffer<S>) {
+    fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
+        let mut buf = buf;
         for tf_box in self.chain.iter_mut() {
-            tf_box.transform(buf);
+            buf = tf_box.transform(buf);
         }
+        buf
     }
 
     fn reset(&mut self) {
@@ -184,27 +187,15 @@ impl<S> ParallelChain<S> {
 
 impl ParallelChain<Float> {
     /* Create a wet/dry mix
-     *
-     * Internally, combine tf (+amp) with PassThrough (+amp)
-     */
+    *
+    * Internally, combine tf (+amp) with PassThrough (+amp)
+    */
     pub fn wetdry(tf: impl Transform<Float> + 'static, wetness: Float) -> Self {
         assert!(wetness >= 0.0 && wetness <= 1.0, "wetness must be between 0 and 1");
-
+        
         let wet = chain!(tf, Amp::new(wetness));
         let dry = Amp::new(1.0 - wetness);
         ParallelChain::from(wet).push(dry)
-    }
-}
-
-// Merge 2 ParallelChains together into a single ParallelChain
-impl<S> Add for ParallelChain<S> {
-    type Output = ParallelChain<S>;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        let mut chain = self.chain;
-        let mut chain2 = rhs.chain;
-        chain.append(&mut chain2);
-        Self { chain }
     }
 }
 
@@ -222,22 +213,32 @@ macro_rules! parallel_chain {
     };
 }
 
+// Merge 2 ParallelChains together into a single ParallelChain
+impl<S> Add for ParallelChain<S> {
+    type Output = ParallelChain<S>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut chain = self.chain;
+        let mut chain2 = rhs.chain;
+        chain.append(&mut chain2);
+        Self { chain }
+    }
+}
+
 impl<S> Transform<S> for ParallelChain<S>
 where S: Copy+Zero {
-    fn transform(&mut self, buf: &mut SampleBuffer<S>) {
+    fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
         // data_final = final data vector (as float)
         let mut data_final = vec![S::zero(); buf.len()];
 
         // run each transform, scale result, and add to data_final
-        let mut buf_copy: SampleBuffer<S>;
         for tf_box in self.chain.iter_mut() {
-            buf_copy = buf.clone();
-            tf_box.transform(&mut buf_copy);
-            data_final = vec_add(&data_final, buf_copy.data());
+            let buf_part = tf_box.transform(buf.clone());
+            data_final = vec_add(&data_final, buf_part.data());
         }
 
         // assign new data to buf
-        *buf.data_mut() = data_final;
+        buf.with_data(data_final)
     }
 
     fn reset(&mut self) {
@@ -278,11 +279,10 @@ where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
 }
 
 impl<S> Transform<S> for Amp<S>
-where S: AsPrimitive<Float>, Float: AsPrimitive<S> {
-    fn transform(&mut self, buf: &mut SampleBuffer<S>) {
-        for samp in buf.data_mut().iter_mut() {
-            *samp = (samp.as_() * self.gain).as_();
-        }
+where S: AsPrimitive<Float> + Mul<Output=S>, Float: AsPrimitive<S> {
+    fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
+        let data_new = vec_scale(buf.data(), self.gain.as_());
+        buf.with_data(data_new)
     }
 
     fn reset(&mut self) {}
@@ -492,11 +492,11 @@ impl Conv1d {
 impl Transform<Float> for Conv1d {
     // apply (causal) filter to buffer,
     // this will delay signal by k-1 samples
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
         // note: multi-channel vectors are interleaved:
         // [left, right, left, right, ...]
         let numch = buf.channels();
-        let data = buf.data_mut();
+        let data = buf.data();
         let k = self.kernel.len();
         let n = data.len();
         let npad = numch as usize * (k-1); // amount of padding - LEFT SIDE ONLY
@@ -533,7 +533,7 @@ impl Transform<Float> for Conv1d {
         self.lastchunk = data[data.len()-npad..].into();
 
         // move buffer pointer to output vector
-        *data = output;
+        buf.with_data(output)
     }
 
     // delete cached data chunk
@@ -754,10 +754,10 @@ impl Transform<Float> for DiffEq {
         self.chcount = 0;
     }
 
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
         let chcount = buf.channels();
         let chsize = chcount as usize;
-        let data = buf.data_mut();
+        let data = buf.data();
         let mut data_new = vec![0.0; data.len()];
 
         let mut x_sum: Float; // x_sum = a0 x[n] + ... + ak x[n-k]
@@ -804,7 +804,7 @@ impl Transform<Float> for DiffEq {
         }
 
         // replace old buffer with new
-        *data = data_new;
+        buf.with_data(data_new)
     }
 }
 
@@ -814,13 +814,15 @@ impl Transform<Float> for DiffEq {
 pub struct ToMono;
 
 impl Transform<Float> for ToMono {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
-        let numch = buf.channels();
-        let data = buf.data_mut();
-        for chunk in data.chunks_mut(numch as usize) {
-            let avg = chunk.iter().sum::<Float>() / numch as Float;
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
+        let n_ch = buf.channels() as usize;
+        let mut buf_new = buf;
+        let data_new = buf_new.data_mut();
+        for chunk in data_new.chunks_exact_mut(n_ch) {
+            let avg = chunk.iter().sum::<Float>() / n_ch as Float;
             chunk.fill(avg);
         }
+        buf_new
     }
 
     fn reset(&mut self) {}
@@ -867,10 +869,11 @@ impl Pan {
 }
 
 impl Transform<Float> for Pan {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
         let numch = buf.channels();
         assert!(numch == 2, "Sample buffer must be stereo");
-        for chunk in buf.data_mut().chunks_exact_mut(numch as usize) {
+        let mut buf_new = buf;
+        for chunk in buf_new.data_mut().chunks_exact_mut(numch as usize) {
             let samp_l = zip(&self.left_wt, chunk.iter())
                 .map(|(&x, &y)| {x * y})
                 .sum();
@@ -880,6 +883,7 @@ impl Transform<Float> for Pan {
             chunk[0] = samp_l;
             chunk[1] = samp_r;
         }
+        buf_new
     }
 
     fn reset(&mut self) {}
@@ -918,8 +922,8 @@ impl Phaser {
 }
 
 impl Transform<Float> for Phaser {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
-        self.chain.transform(buf);
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
+        self.chain.transform(buf)
     }
 
     fn reset(&mut self) {
@@ -939,7 +943,7 @@ impl Decimator {
 }
 
 impl Transform<Float> for Decimator {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
         let n_ch = buf.channels() as usize;
         let chunk_len = self.factor as usize;
         let chunk_sz = chunk_len * n_ch;
@@ -949,8 +953,7 @@ impl Transform<Float> for Decimator {
         // skip entire buffer, if needed
         if n_skip_start >= buf.len() {
             self.remainder += buf.len() / n_ch;
-            *buf.data_mut() = vec![];
-            return
+            return buf.with_data(vec![])
         }
         let mut data = &buf.data()[n_skip_start..];
 
@@ -962,8 +965,8 @@ impl Transform<Float> for Decimator {
         // if less than 1 full chunk exists, just take the 1st sample
         if n_chunks == 0 {
             self.remainder = buf_len;
-            *buf.data_mut() = data[..n_ch].into();
-            return
+            let data_new = data[..n_ch].into();
+            return buf.with_data(data_new)
         }
         
         // take the first [n_ch] out of every [factor] elements,
@@ -975,7 +978,7 @@ impl Transform<Float> for Decimator {
         }
 
         self.remainder = data.len() / n_ch;
-        *buf.data_mut() = data_new;
+        buf.with_data(data_new)
     }
 
     fn reset(&mut self) {
@@ -994,7 +997,7 @@ impl Resampler {
 }
 
 impl Transform<Float> for Resampler {
-    fn transform(&mut self, buf: &mut SampleBuffer<Float>) {
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
         let fs2_fs1 = self.fs / buf.fs() as Float;
         let n_ch = buf.channels() as usize;
         let n_in = buf.len() / n_ch;
@@ -1013,7 +1016,7 @@ impl Transform<Float> for Resampler {
                 data_new[i*n_ch + c] = x;
             }
         }
-        *buf.data_mut() = data_new;
+        buf.with_data(data_new)
     }
 
     fn reset(&mut self) {}

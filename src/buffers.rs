@@ -386,6 +386,14 @@ impl<S> SampleBuffer<S> {
         }
     }
 
+    pub fn with_data(self, data: Vec<S>) -> Self {
+        Self {
+            data,
+            numch: self.numch,
+            fs: self.fs
+        }
+    }
+
     // number of channels
     pub fn channels(&self) -> ChannelCount {
         self.numch

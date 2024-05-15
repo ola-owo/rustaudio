@@ -111,7 +111,7 @@ struct STFTPlotData {
     tvals: Vec<Float>
 }
 
-fn write_stft<S,P: AsRef<Path>>(sampler:S, title: String, out_path: &P) -> STFTPlotData
+fn write_stft<S,P: AsRef<Path>>(sampler:S) -> STFTPlotData
 where S: BufferSamples<Float> + ExactSizeIterator {
     // build stft array
     // also save time and freq step-sizes for later
