@@ -7,7 +7,7 @@ use crate::buffers::{BufferSamples, SampleBuffer};
 use rustfft::{num_complex::Complex, Fft, FftNum, FftPlanner};
 use ndarray::{s, Array2, Array3, Axis};
 
-use crate::Float;
+use crate::utils::Float;
 
 /* Monitor describes tools that monitor a signal stream.
  * Similar to Transform but without modifying the signal.
@@ -105,13 +105,13 @@ where T: FftNum, C: BufferSamples<T> + ExactSizeIterator {
     }
 }
 
-struct STFTPlotData {
+pub struct STFTPlotData {
     stft_data: Array2<Float>,
     fvals: Vec<Float>,
     tvals: Vec<Float>
 }
 
-fn write_stft<S,P: AsRef<Path>>(sampler:S) -> STFTPlotData
+pub fn write_stft<S,P: AsRef<Path>>(sampler:S) -> STFTPlotData
 where S: BufferSamples<Float> + ExactSizeIterator {
     // build stft array
     // also save time and freq step-sizes for later
