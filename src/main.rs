@@ -1,20 +1,12 @@
 use std::path::Path;
 use std::env;
-use std::fs::File;
 
-use hound::{WavReader,WavWriter,read_wave_header};
+use audio::fileio::*;
+use audio::read_transform_write;
+use audio::transforms;
+use audio::buffers::BUFFER_CAP;
 
-use audio::*;
-
-// use crate::buffers::*;
-// use crate::utils::{Int, Float};
-// use crate::transforms::*;
-
-const BUFFER_CAP: usize = 4096;
 const HELP: &str = "usage: audio [input wav]";
-
-type Int = audio::utils::Int;
-type Float = audio::utils::Float;
 
 fn main() {
     // handle input args
@@ -25,35 +17,19 @@ fn main() {
     }
     let wav_in = Path::new(args.get(1).unwrap());
     let wav_out = Path::new(args.get(2).unwrap());
+    check_wav(wav_in).expect("input WAV is invalid");
 
-    // check whether input file is really a wav
-    check_wav(wav_in).expect("input file is not a WAV");
+    // build Transform
+    let mut tf = transforms::Phaser::new(8, 0.5, 0.5);
 
-    // initialize reader
-    let mut wav_reader =  WavReader::open(wav_in)
-        .expect("couldn't open file");
-    let wavspec_in = wav_reader.spec();
-    dbg!(wavspec_in);
-    let wav = buffers::WavIO::<Int,Float>::new();
-    let sampler = wav.iter(&mut wav_reader, BUFFER_CAP);
-    // let sampler = wav.iter_overlap(&mut wav_reader, BUFFER_CAP, BUFFER_CAP/2);
+    // WAV I/O
+    let mut reader: WavReaderAdapter<_,i32,f32> = WavReaderAdapter::from_path(wav_in)
+        .expect("couldn't read input wav");
+    let wavspec = reader.reader.spec();
+    let mut writer: WavWriterAdapter<_,i32,f32> = WavWriterAdapter::from_path(wav_out, wavspec)
+        .expect("couldn't open output wav");
 
-    // initialize wav writer
-    let mut wavspec_out = wavspec_in.clone();
-    wavspec_out.sample_rate *= 2;
-    dbg!(wavspec_out);
-    let writer = WavWriter::create(wav_out, wavspec_out)
-        .expect("couldn't create WAV writer");
-
-    // let mut tf = Resampler::new(24000);
-    let tf = transforms::Decimator::new(2);
-    
     // jump to lib.rs
-    read_tf_write(wav, sampler, tf, writer);
-}
-
-fn check_wav<P: AsRef<Path>>(path: P) -> Result<(),hound::Error> {
-    let mut f = File::open(path)?;
-    read_wave_header(&mut f)?;
-    Ok(())
+    read_transform_write(reader.iter_chunk(BUFFER_CAP), &mut writer, &mut tf)
+        .expect("wav transformation failed");
 }

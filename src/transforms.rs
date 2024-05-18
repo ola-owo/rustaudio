@@ -740,7 +740,7 @@ impl DiffEq {
 
 impl From<Conv1d> for DiffEq {
     fn from(conv: Conv1d) -> Self {
-        // basically: Y(z)/X(z) = H(z)/1
+        // set Y(z) = H(z) and X(z) = 1
         let numer = conv.kernel;
         let denom = vec![1.0];
         Self::new(numer, denom)

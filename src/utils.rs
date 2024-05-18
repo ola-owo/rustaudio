@@ -9,8 +9,8 @@ use num_traits::{AsPrimitive, Num, Zero};
 
 use crate::buffers::SampleBuffer;
 
-pub type Float: = f32; // type used for internal processing
-pub type Int = i16; // type of samples in wav file
+pub type Int = i32; // sample type to read wav samples into
+pub type Float: = f32; // sample type (casted from Int) used for internal processing
 pub type CFloat = Complex<Float>;
 
 /////////////////////////////

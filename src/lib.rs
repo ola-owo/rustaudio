@@ -3,17 +3,32 @@ pub mod buffers;
 pub mod spectral;
 pub mod plot;
 pub mod utils;
+pub mod fileio;
 
-use std::io::{Write,Seek};
+use std::io::{Seek, Write};
+use std::path::Path;
 use num_traits::{AsPrimitive, Float};
-use hound::{Sample, WavWriter};
-use crate::{buffers::{BufferSamples,WavIO}, transforms::Transform};
+use hound::Sample;
 
-// read, transform, and write a sampler
-pub fn read_tf_write<S,F,B,T,W>(wav: WavIO<S,F>, sampler: B, mut tf: T, mut writer: WavWriter<W>)
-where S: 'static+Sample+AsPrimitive<F>, F: 'static+AsPrimitive<S>+Float, B: BufferSamples<F>, T: Transform<F>, W: Write+Seek {
-    for buf in sampler {
-        let buf = tf.transform(buf);
-        wav.write_buffer(&mut writer, buf.data());
+use buffers::{BufferSamples, BUFFER_CAP};
+use transforms::Transform;
+use fileio::*;
+
+pub fn read_transform_write<B,T,W,F,S> (
+    sampler: B,
+    writer: &mut WavWriterAdapter<W,S,F>,
+    tf: &mut T,
+) -> Result<(),hound::Error>
+where 
+    B: BufferSamples<F>,
+    T: Transform<F>,
+    W: Write+Seek,
+    F: Float+AsPrimitive<S>,
+    S: Sample+'static+Copy,
+{
+    for mut buf in sampler {
+        buf = tf.transform(buf);
+        writer.write_buffer(buf.data())?;
     }
+    Ok(())
 }
