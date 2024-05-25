@@ -2,7 +2,7 @@ use std::path::Path;
 use std::env;
 
 use audio::fileio::*;
-use audio::read_transform_write;
+use audio::*;
 use audio::transforms;
 use audio::buffers::BUFFER_CAP;
 
@@ -24,12 +24,22 @@ fn main() {
 
     // WAV I/O
     let mut reader: WavReaderAdapter<_,i32,f32> = WavReaderAdapter::from_path(wav_in)
-        .expect("couldn't read input wav");
+    .expect("couldn't read input wav");
+    eprintln!("Loaded {}", wav_in.display());
     let wavspec = reader.reader.spec();
     let mut writer: WavWriterAdapter<_,i32,f32> = WavWriterAdapter::from_path(wav_out, wavspec)
         .expect("couldn't open output wav");
 
+    let sampler = reader.iter_chunk(BUFFER_CAP);
+    // let sampler = reader.iter_overlap(BUFFER_CAP, BUFFER_CAP/2);
+
     // jump to lib.rs
-    read_transform_write(reader.iter_chunk(BUFFER_CAP), &mut writer, &mut tf)
+    read_transform_write(sampler, &mut writer, &mut tf)
         .expect("wav transformation failed");
+    // let title = wav_in.file_stem().unwrap().to_str().unwrap().into();
+    // let outpath = wav_in.with_extension("png");
+    // eprint!("Writing {} ...", outpath.display());
+    // spectrogram(sampler, outpath, title)
+    //     .expect("spectrogram creation failed");
+    eprintln!("Done.");
 }

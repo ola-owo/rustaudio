@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 // std lib imports
 use std::f32::consts::*;
 use std::collections::VecDeque;
@@ -193,8 +192,8 @@ impl ParallelChain<Float> {
     pub fn wetdry(tf: impl Transform<Float> + 'static, wetness: Float) -> Self {
         assert!(wetness >= 0.0 && wetness <= 1.0, "wetness must be between 0 and 1");
         
-        let wet = chain!(tf, Amp::new(wetness));
-        let dry = Amp::new(1.0 - wetness);
+        let wet = chain!(tf, Gain::new(wetness));
+        let dry = Gain::new(1.0 - wetness);
         ParallelChain::from(wet).push(dry)
     }
 }
@@ -248,15 +247,15 @@ where S: Copy+Zero {
     }
 }
 
-// Amp: scale signal up or down.
-pub struct Amp<S> {
+// Gain: scale signal up or down.
+pub struct Gain<S> {
     // here, gain is a multiplier
     gain: Float,
     stype: PhantomData<S>
 }
 
 #[allow(dead_code)]
-impl<S> Amp<S>
+impl<S> Gain<S>
 where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
     pub fn new(gain: Float) -> Self {
         Self {gain, stype: PhantomData }
@@ -278,7 +277,7 @@ where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
     }
 }
 
-impl<S> Transform<S> for Amp<S>
+impl<S> Transform<S> for Gain<S>
 where S: AsPrimitive<Float> + Mul<Output=S>, Float: AsPrimitive<S> {
     fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
         let data_new = vec_scale(buf.data(), self.gain.as_());
@@ -287,17 +286,6 @@ where S: AsPrimitive<Float> + Mul<Output=S>, Float: AsPrimitive<S> {
 
     fn reset(&mut self) {}
 }
-
-// impl<S> Transform<S> for Amp
-// where S: AsPrimitive<Float>, Float: AsPrimitive<S> {
-//     fn transform(&mut self, buf: &mut SampleBuffer<S>) {
-//         for samp in buf.data_mut().iter_mut() {
-//             *samp = (samp.as_() * self.gain).as_();
-//         }
-//     }
-
-//     fn reset(&mut self) {}
-// }
 
 /* Conv1d: Convolve signal with a kernel.
  * This can model any linear filter

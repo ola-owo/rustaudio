@@ -7,6 +7,7 @@ use ndarray::{Array1, Array2, Axis};
 use plotters::prelude::*;
 
 use crate::buffers::SampleRate;
+use crate::spectral::STFTPlotData;
 use crate::utils::{Float, interp_sinc};
 
 #[allow(dead_code)]
@@ -70,29 +71,24 @@ pub fn spectrogram<P: AsRef<Path>>(
 }
 
 #[allow(dead_code)]
-pub fn spectrogram_log<P: AsRef<Path>>(
-    fname: &P, arr: &Array2<Float>, fvals: Vec<Float>, tvals: Vec<Float>, title: String
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn spectrogram_log<P: AsRef<Path>>(fname: &P, title: String, plot_data: &STFTPlotData)
+-> Result<(), Box<dyn std::error::Error>> {
     const PAD_TOP: u32 = 40;
     const PAD_BOTTOM: u32 = 60;
     const PAD_LEFT: u32 = 60;
     const PAD_RIGHT: u32 = 30;
 
+    let arr = &plot_data.stft_data;
+    let tvals = &plot_data.tvals;
+    let fvals = &plot_data.fvals;
     let (ntimes, npts) = arr.dim();
     let img_width = ntimes as u32 / 8 + PAD_LEFT;
     let img_height = 15 * (npts as f64).log2().floor() as u32 + PAD_TOP + PAD_BOTTOM;
 
     let root = BitMapBackend::new(fname, (img_width, img_height))
         .into_drawing_area();
-    // root.fill(&WHITE)?;
     root.fill(&VulcanoHSL::get_color(0.0))?;
 
-    // axis limits and step sizes
-    // let fs = fs as f64;
-    // let fstep = fs * 0.5 / npts as f64;
-    // let fvals = (0..npts)
-    //     .map(|x| x as f64 * fstep)
-    //     .collect::<Vec<_>>();
     // get log-spaced frequency values to show
     let log_max = (npts as f64).log2().floor();
     let fvals_log_ix = Array1::logspace(2.0, 1.0, log_max, log_max as usize);
@@ -102,17 +98,7 @@ pub fn spectrogram_log<P: AsRef<Path>>(
     let npts_log_interp = 15 * fvals_log_len;
     let fvals_log_interp = Array1::<f64>::geomspace(fvals_log[0].as_(), fvals_log[fvals_log_len-1].as_(), npts_log_interp).unwrap();
 
-    /*
-    0.5 -> stft overlap 
-    2*npts -> fft length (including negative freqs)
-    1/fs -> secs per sample
-    */
-    // let tstep = 0.5 * npts as f64 * 2.0 / fs;
-    // let tvals: Vec<_> = (0..ntimes)
-    //     .map(|x| x as f64 * tstep)
-    //     .collect();
-
-
+    // build chart
     let mut chart = ChartBuilder::on(&root)
         .caption(title, 40)
         .set_label_area_size(LabelAreaPosition::Top, PAD_TOP)
@@ -127,37 +113,7 @@ pub fn spectrogram_log<P: AsRef<Path>>(
         .y_desc("Frequency (Hz)")
         .draw()?;
 
-    // let pts = (0..ntimes).map(|it| repeat(it).zip(0..npts))          
-    //     .flatten()
-    //     .map(|(ixt,ixf)| {
-    //         let &t0 = tvals.get(ixt).unwrap();
-    //         let &f0 = fvals.get(ixf).unwrap();
-    //         let t1 = t0 + tstep;
-    //         let f1 = f0 + fstep;
-    //         let y = *arr.get((ixt, ixf)).unwrap() as f64;
-    //         [(t0,0.0,f0), (t1, y, f1)]
-    //     })
-    //     .collect::<Vec<_>>();
-
-    // chart.draw_series(
-    //     (0..ntimes).map(|it| repeat(it).zip(fvals_log_ix.iter()))
-    //         .flatten()
-    //         .map(|(ixt, &ixf)| {
-    //             let &t0 = tvals.get(ixt).unwrap();
-    //             let &f0 = fvals.get(ixf).unwrap();
-    //             // let t1 = t0 + tstep;
-    //             // let f1 = f0 + fstep;
-    //             let y = *arr.get((ixt, ixf)).unwrap() as f64;
-    //             // Rectangle::new(
-    //             //     [(t0, f0 + f64::MIN_POSITIVE), (t1, f1)],
-    //             //     VulcanoHSL::get_color(y)
-    //             // )
-    //             Pixel::new(
-    //                 (t0, f0),
-    //                 VulcanoHSL::get_color(y)
-    //             )
-    //         })
-    // )?;
+    // draw spectrogram on chart
     chart.draw_series(
         (0..ntimes).map(|i| {
             let hvals = arr.index_axis(Axis(0), i); // frequency spectrum H[f] at time i
@@ -168,11 +124,8 @@ pub fn spectrogram_log<P: AsRef<Path>>(
             }
             let t = tvals[i];
 
-            // repeat(t).zip(0..npts_log_interp)
             izip!(repeat(t), fvals_log_interp.iter(), hvals_logsp_interp)
                 .map(|(t, &f, h)| {
-                    // let &t0 = tvals.get(ixt).unwrap();
-                    // let &f0 = fvals.get(ixf).unwrap();
                     // Rectangle::new(
                     //     [(t0, f0 + f64::MIN_POSITIVE), (t1, f1)],
                     //     VulcanoHSL::get_color(y)
