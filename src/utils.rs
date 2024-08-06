@@ -69,7 +69,17 @@ where R:'static+num_traits::Float+From<Float> {
 /* Multiple a vector by a scalar
  * Output vec length is the max length of either input 
  */
-pub fn vec_scale<T>(v: &Vec<T>, k: T) -> Vec<T>
+pub fn vec_scale<T>(v: &[T], k: T) -> Vec<T>
+where T: Copy+Mul<T, Output=T> {
+    v.iter()
+        .map(|&x| x*k)
+        .collect::<Vec<_>>()
+}
+
+/* Multiple a vector by a scalar (in place)
+ * Output vec length is the max length of either input 
+ */
+pub fn vec_scale_inplace<T>(v: &mut Vec<T>, k: T) -> Vec<T>
 where T: Copy+Mul<T, Output=T> {
     v.iter()
         .map(|&x| x*k)

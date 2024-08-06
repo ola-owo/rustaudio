@@ -7,24 +7,24 @@ pub mod utils;
 pub mod fileio;
 
 use std::{io::{Seek, Write}, path::Path};
-use num_traits::{AsPrimitive, Float};
-use hound::Sample;
 
-use buffers::BufferSamples;
+use buffers::{Sample, BufferSamples};
+use num_traits::AsPrimitive;
 use transforms::Transform;
 use fileio::*;
+use utils::Float;
 
-pub fn read_transform_write<B,T,W,F,S>(
+pub fn read_transform_write<B,T,W,S>(
     sampler: B,
-    writer: &mut WavWriterAdapter<W,S,F>,
+    writer: &mut WavWriterAdapter<W,S>,
     tf: &mut T,
 ) -> Result<(), Box<dyn std::error::Error>>
 where 
-    B: BufferSamples<F>,
-    T: Transform<F>,
+    B: BufferSamples<Float>,
+    T: Transform<Float>,
     W: Write+Seek,
-    F: Float+AsPrimitive<S>,
-    S: Sample+'static+Copy,
+    S: Sample,
+    Float: AsPrimitive<S>
 {
     for mut buf in sampler {
         buf = tf.transform(buf);

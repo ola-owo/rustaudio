@@ -1,35 +1,36 @@
 use std::marker::PhantomData;
-use hound::{Sample, WavSpec};
-use num_traits::{AsPrimitive,Float};
+use hound::WavSpec;
+use num_traits::AsPrimitive;
+use crate::utils::Float;
 
 pub type ChannelCount = u16;
 pub type SampleRate = u32;
 
 pub const BUFFER_CAP: usize = 4096;
 
-pub struct WavSamplesWrapper<I,F> {
+pub trait Sample: hound::Sample + AsPrimitive<Float> + Copy + 'static {}
+impl<S: hound::Sample + AsPrimitive<Float>> Sample for S {}
+
+pub struct WavSamplesWrapper<I> {
     iter: I,
-    ftype: PhantomData<F>
 }
 
-impl<I,F,S> WavSamplesWrapper<I,F>
+impl<I,S> WavSamplesWrapper<I>
 where
     I: Iterator<Item = hound::Result<S>>,
-    S: Sample+AsPrimitive<F>,
-    F: Float+'static
+    S: Sample,
 {
     pub fn new(iter: I) -> Self {
-        Self { iter, ftype: PhantomData }
+        Self { iter }
     }
 }
 
-impl<I,F,S> Iterator for WavSamplesWrapper<I,F>
+impl<I,S> Iterator for WavSamplesWrapper<I>
 where
     I: Iterator<Item = hound::Result<S>>,
-    S: Sample+AsPrimitive<F>,
-    F: AsPrimitive<S>
+    S: Sample,
 {
-    type Item = hound::Result<F>;
+    type Item = hound::Result<Float>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let res = self.iter.next()?;
@@ -43,11 +44,10 @@ where
     }
 }
 
-impl<I,F,S> ExactSizeIterator for WavSamplesWrapper<I,F>
+impl<I,S> ExactSizeIterator for WavSamplesWrapper<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    S: Sample+AsPrimitive<F>,
-    F: AsPrimitive<S>
+    S: Sample,
 {}
 
 // BufferSamples is an iterator over SampleBuffers
@@ -70,14 +70,13 @@ pub trait BufferSamples<S>: Iterator<Item = SampleBuffer<S>> {
 
 /* ChunkSamples: basic BufferSamples impl with no overlap between buffers
  */
-pub struct ChunkSamples<I,F> {
+pub struct ChunkSamples<I> {
     sample_iter: I,
     buffer_size: usize,
     wavspec: WavSpec,
-    float_type: PhantomData<F>
 }
 
-impl<I,F,S> ChunkSamples<I,F>
+impl<I,S> ChunkSamples<I>
 where
     I: Iterator<Item = hound::Result<S>>,
     S: Sample
@@ -92,18 +91,15 @@ where
             sample_iter,
             buffer_size,
             wavspec,
-            float_type: PhantomData,
-            // samp_type: PhantomData
         }
     }
 
 }
 
-impl<I,F,S> BufferSamples<F> for ChunkSamples<I,F>
+impl<I,S> BufferSamples<Float> for ChunkSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    S: Sample+AsPrimitive<F>,
-    F: 'static+Float
+    S: Sample,
 {
     fn wavspec(&self) -> &WavSpec {
         &self.wavspec
@@ -126,13 +122,12 @@ where
     }
 }
 
-impl<I,F,S> Iterator for ChunkSamples<I,F>
+impl<I,S> Iterator for ChunkSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {
-    type Item = SampleBuffer<F>;
+    type Item = SampleBuffer<Float>;
     fn next(&mut self) -> Option<Self::Item> {
         let mut vec = Vec::with_capacity(self.buffer_size);
         let mut sample: S;
@@ -157,26 +152,25 @@ where
     }
 }
 
-impl<I,F,S> ExactSizeIterator for ChunkSamples<I,F>
+impl<I,S> ExactSizeIterator for ChunkSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {}
 
 /* OverlapSamples: yields overlapping sample buffers
  */
-pub struct OverlapSamples<I,F> {
+pub struct OverlapSamples<I> {
     // sample_iter: WavSamples<'wr,R,S>,
     sample_iter: I,
     buffer_size: usize,
     step_size: usize,
     wavspec: WavSpec,
     is_empty: bool,
-    last_chunk: Vec<F>,
+    last_chunk: Vec<Float>,
 }
 
-impl<I,F> OverlapSamples<I,F> {
+impl<I> OverlapSamples<I> {
     pub fn new(
         sample_iter: I,
         buffer_size: usize,
@@ -195,11 +189,10 @@ impl<I,F> OverlapSamples<I,F> {
     }
 }
 
-impl<I,F,S> BufferSamples<F> for OverlapSamples<I,F>
+impl<I,S> BufferSamples<Float> for OverlapSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {
     fn wavspec(&self) -> &WavSpec {
         &self.wavspec
@@ -222,13 +215,12 @@ where
     }
 }
 
-impl<I,F,S> Iterator for OverlapSamples<I,F>
+impl<I,S> Iterator for OverlapSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {
-    type Item = SampleBuffer<F>;
+    type Item = SampleBuffer<Float>;
     fn next(&mut self) -> Option<Self::Item> {
         let mut sample: S;
 
@@ -253,7 +245,7 @@ where
         // if wavsamples is exhausted, pad the buffer with 0s and don't fill last_chunk
         if self.is_empty {
             for _ in 0..(self.buffer_size - vec.len()) {
-                vec.push(F::zero());
+                vec.push(0.0);
             }
         } else {
             self.last_chunk.extend(&vec[self.step_size..]);
@@ -272,26 +264,25 @@ where
     }
 }
 
-impl<I,F,S> ExactSizeIterator for OverlapSamples<I,F>
+impl<I,S> ExactSizeIterator for OverlapSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {}
 
 /* JumpSamples: yields overlapping sample buffers
  */
-pub struct JumpSamples<I,F> {
+pub struct JumpSamples<I> {
     // sample_iter: WavSamples<'wr,R,S>,
     sample_iter: I,
     buffer_size: usize,
     step_size: usize,
     wavspec: WavSpec,
     is_empty: bool,
-    float_type: PhantomData<F>
+    float_type: PhantomData<Float>
 }
 
-impl<I,F> JumpSamples<I,F> {
+impl<I> JumpSamples<I> {
     pub fn new(
         // sample_iter: WavSamples<'wr,R,S>,
         sample_iter: I,
@@ -311,11 +302,10 @@ impl<I,F> JumpSamples<I,F> {
     }
 }
 
-impl<I,F,S> BufferSamples<F> for JumpSamples<I,F>
+impl<I,S> BufferSamples<Float> for JumpSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {
     fn wavspec(&self) -> &WavSpec {
         &self.wavspec
@@ -338,13 +328,12 @@ where
     }
 }
 
-impl<I,F,S> Iterator for JumpSamples<I,F>
+impl<I,S> Iterator for JumpSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {
-    type Item = SampleBuffer<F>;
+    type Item = SampleBuffer<Float>;
     fn next(&mut self) -> Option<Self::Item> {
         let mut sample: S;
 
@@ -385,18 +374,16 @@ where
     }
 }
 
-impl<I,F,S> ExactSizeIterator for JumpSamples<I,F>
+impl<I,S> ExactSizeIterator for JumpSamples<I>
 where
     I: ExactSizeIterator<Item = hound::Result<S>>,
-    F:'static+Float,
-    S:Sample+AsPrimitive<F>
+    S:Sample
 {}
 
 /* SampleBuffer: Represents a chunk of interleaved multichannel data
  * Data vector is owned by this object.
  * 
  * S: data type of samples in wav file
- * F: (float) data type of buffer
  */
 #[derive(Clone)]
  pub struct SampleBuffer<S> {

@@ -1,31 +1,32 @@
-// std lib imports
 use std::f32::consts::*;
 use std::collections::VecDeque;
 use std::iter::zip;
-use std::marker::PhantomData;
-use std::ops::{Add, Mul};
+use std::ops::Add;
+use std::sync::Mutex;
 use num_traits::real::Real;
-use num_traits::{AsPrimitive, Zero};
+use num_traits::Zero;
 // external crates
 use rustfft::{FftPlanner, num_complex::Complex};
+#[cfg(feature = "rayon")]
+use rayon::prelude::*;
 // local crates
 use crate::buffers::{ChannelCount, SampleBuffer, SampleRate};
 use crate::utils::*;
 
-/* Transform an audio buffer
- * filter, pan, gain, whatever
- * 
- * transform() mutates a SampleBuffer in-place
- * reset() resets the transform's internal state
- */
-pub trait Transform<S> {
+/// Transform an audio buffer
+/// filter, pan, gain, whatever
+/// 
+/// transform() mutates a SampleBuffer in-place
+/// reset() resets the transform's internal state
+
+pub trait Transform<S>: Send {
     fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S>;
     // fn transform_inplace(&mut self, buf: &mut SampleBuffer<S>);
     // fn transform_borrow(&mut self, buf: &SampleBuffer<S>) -> SampleBuffer<S>;
     fn reset(&mut self);
 }
 
-// Dummy transform that does nothing
+/// Dummy transform that does nothing
 pub struct PassThrough;
 
 impl<S> Transform<S> for PassThrough {
@@ -33,11 +34,11 @@ impl<S> Transform<S> for PassThrough {
     fn reset(&mut self) {}
 }
 
-// trait describing compound transforms
-// TODO: put something useful here
+/// trait describing compound transforms
+/// TODO: make this useful
 trait MultiTransform {}
 
-// Chain multiple transforms together
+/// Chain multiple transforms together
 pub struct Chain<S> {
     chain: Vec<Box<dyn Transform<S>>>,
 }
@@ -128,12 +129,22 @@ impl<S> Transform<S> for Chain<S> {
     }
 }
 
+#[cfg(feature = "rayon")]
+pub trait ParallelTransform<S>: Transform<S> + 'static + Send {}
+#[cfg(feature = "rayon")]
+impl<S, T: Transform<S> + 'static + Send> ParallelTransform<S> for T {}
+
+#[cfg(not(feature = "rayon"))]
+pub trait ParallelTransform<S>: Transform<S> + 'static {}
+#[cfg(not(feature = "rayon"))]
+impl<S, T: Transform<S> + 'static> ParallelTransform<S> for T {}
+
 /* Chain transforms together in parallel
  * 
  * all transforms are weighted equally (for now)
  */
 pub struct ParallelChain<S> {
-    chain: Vec<Box<dyn Transform<S>>>,
+    chain: Vec<Box<dyn ParallelTransform<S>>>,
 }
 
 impl<S> MultiTransform for ParallelChain<S> {}
@@ -143,13 +154,13 @@ impl<S> ParallelChain<S> {
         Self {chain: vec![]}
     }
 
-    pub fn from(tf: impl Transform<S> + 'static) -> Self {
-        Self {chain: vec![Box::new(tf)]}
+    pub fn from(tf: impl ParallelTransform<S>) -> Self {
+        Self { chain: vec![Box::new(tf)] }
     }
 
     // 'static bound requires input [tf] to be an owned type,
     // which all Transform implementations are
-    pub fn push(mut self, tf: impl Transform<S> + 'static) -> Self {
+    pub fn push(mut self, tf: impl ParallelTransform<S>) -> Self {
         self.chain.push(Box::new(tf));
         self
     }
@@ -159,7 +170,7 @@ impl<S> ParallelChain<S> {
     }
 
     // get a reference to the nth chain element
-    pub fn get(&self, n: usize) -> Option<&dyn Transform<S>> {
+    pub fn get(&self, n: usize) -> Option<&dyn ParallelTransform<S>> {
         match self.chain.get(n) {
             Some(tf_box) => Some(tf_box.as_ref()),
             None => None
@@ -167,7 +178,7 @@ impl<S> ParallelChain<S> {
     }
 
     // get a mutable reference to the nth chain element
-    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform<S>> {
+    pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn ParallelTransform<S>> {
         match self.chain.get_mut(n) {
             Some(tf_box) => Some(tf_box.as_mut()),
             None => None
@@ -175,11 +186,11 @@ impl<S> ParallelChain<S> {
     }
 
     // remove the nth chain element (panic if out of bounds)
-    pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform<S>>> {
+    pub fn remove(&mut self, n: usize) -> Option<Box<dyn ParallelTransform<S>>> {
         if n >= self.chain.len() {
             None
         } else {
-            Some(self.chain.remove(n))
+            Some(self.chain.swap_remove(n))
         }
     }
 }
@@ -189,7 +200,7 @@ impl ParallelChain<Float> {
     *
     * Internally, combine tf (+amp) with PassThrough (+amp)
     */
-    pub fn wetdry(tf: impl Transform<Float> + 'static, wetness: Float) -> Self {
+    pub fn wetdry(tf: impl ParallelTransform<Float>, wetness: Float) -> Self {
         assert!(wetness >= 0.0 && wetness <= 1.0, "wetness must be between 0 and 1");
         
         let wet = chain!(tf, Gain::new(wetness));
@@ -224,6 +235,39 @@ impl<S> Add for ParallelChain<S> {
     }
 }
 
+#[cfg(feature = "rayon")]
+impl<S> Transform<S> for ParallelChain<S>
+where S: Copy+Zero+Send+Sync {
+    fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
+        // let chain = self.chain as Vec<Box<dyn Transform<S> + 'static + Send>>;
+        // data_final = final data vector (as float)
+        let data_final_lock = Mutex::new(vec![S::zero(); buf.len()]);
+
+        // run each transform, scale result, and add to data_final
+        // for tf_box in self.chain.iter_mut() {
+        self.chain.par_iter_mut().for_each(|tf_box| {
+            let buf_part = tf_box.transform(buf.clone());
+            let mut data_final = data_final_lock.lock()
+                .expect("data_final is poisoned due to panic in another thread");
+            *data_final = vec_add(&data_final, buf_part.data());
+        });
+
+        // assign new data to buf
+        buf.with_data(
+            data_final_lock.into_inner()
+            .expect("data_final is poisoned due to panic in another thread")
+        )
+    }
+
+    fn reset(&mut self) {
+        // for tf_box in self.chain.par_iter_mut() {
+        self.chain.par_iter_mut().for_each(|tf_box| {
+            tf_box.reset();
+        });
+    }
+}
+
+#[cfg(not(feature = "rayon"))]
 impl<S> Transform<S> for ParallelChain<S>
 where S: Copy+Zero {
     fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
@@ -248,28 +292,29 @@ where S: Copy+Zero {
 }
 
 // Gain: scale signal up or down.
-pub struct Gain<S> {
+pub struct Gain {
     // here, gain is a multiplier
     gain: Float,
-    stype: PhantomData<S>
+    // stype: PhantomData<S>
 }
 
 #[allow(dead_code)]
-impl<S> Gain<S>
-where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
+// impl<S> Gain<S>
+// where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
+impl Gain {
     pub fn new(gain: Float) -> Self {
-        Self {gain, stype: PhantomData }
+        Self { gain }
     }
     
     // invert signal polarity
     pub fn inverter() -> Self {
-        Self { gain: -1.0, stype: PhantomData }
+        Self { gain: -1.0 }
     }
     
     // dB change = 20 * log10(gain)
     pub fn db(db: Float) -> Self {
         let gain = Self::db2gain(db);
-        Self { gain, stype: PhantomData }
+        Self { gain }
     }
 
     fn db2gain(db: Float) -> Float {
@@ -277,11 +322,10 @@ where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
     }
 }
 
-impl<S> Transform<S> for Gain<S>
-where S: AsPrimitive<Float> + Mul<Output=S>, Float: AsPrimitive<S> {
-    fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
-        let data_new = vec_scale(buf.data(), self.gain.as_());
-        buf.with_data(data_new)
+impl Transform<Float> for Gain {
+    fn transform(&mut self, buf: SampleBuffer<Float>) -> SampleBuffer<Float> {
+        let scaled = vec_scale(buf.data(), self.gain);
+        buf.with_data(scaled)
     }
 
     fn reset(&mut self) {}
