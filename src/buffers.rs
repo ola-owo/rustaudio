@@ -401,6 +401,7 @@ impl<S> SampleBuffer<S> {
         }
     }
 
+    /// assign new data vec to buffer, and return Self.
     pub fn with_data(self, data: Vec<S>) -> Self {
         Self {
             data,
@@ -409,32 +410,32 @@ impl<S> SampleBuffer<S> {
         }
     }
 
-    // number of channels
+    /// get number of channels
     pub fn channels(&self) -> ChannelCount {
         self.numch
     }
 
-    // sample rate (hz)
+    /// get sample rate (hz)
     pub fn fs(&self) -> SampleRate {
         self.fs
     }
 
-    // reference to internal vec
+    /// get reference to internal data
     pub fn data(&self) -> &Vec<S> {
         &self.data
     }
 
-    // mutable ref to internal vec
+    /// get mutable ref to internal data
     pub fn data_mut(&mut self) -> &mut Vec<S> {
         &mut self.data
     }
 
-    // total length of internal vec
+    /// total length of internal data
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
-    // buffer dimensions: (n_channels, n_samples_per_channel)
+    /// buffer dimensions: (n_channels, n_samples_per_channel)
     pub fn dim(&self) -> (usize, usize) {
         let nsamp_per_ch = self.data.len() / (self.numch as usize);
         (self.numch.into(), nsamp_per_ch)

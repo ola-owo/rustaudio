@@ -3,26 +3,32 @@ use std::collections::VecDeque;
 use std::iter::zip;
 use std::ops::Add;
 use std::sync::Mutex;
+
+// external crates
 use num_traits::real::Real;
 use num_traits::Zero;
-// external crates
 use rustfft::{FftPlanner, num_complex::Complex};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
+
 // local crates
 use crate::buffers::{ChannelCount, SampleBuffer, SampleRate};
 use crate::utils::*;
 
-/// Transform an audio buffer
-/// filter, pan, gain, whatever
-/// 
-/// transform() mutates a SampleBuffer in-place
-/// reset() resets the transform's internal state
+/// This trait describes objects that can transform an audio buffer.
+/// e.g. filter, pan, gain
 
 pub trait Transform<S>: Send {
+    /// transform an owned SampleBuffer.
     fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S>;
+
+    /// transform a SampleBuffer in place.
     // fn transform_inplace(&mut self, buf: &mut SampleBuffer<S>);
+
+    /// transform a borrowed SampleBuffer and return a new buffer.
     // fn transform_borrow(&mut self, buf: &SampleBuffer<S>) -> SampleBuffer<S>;
+
+    /// reset the Transform's internal state
     fn reset(&mut self);
 }
 
@@ -34,38 +40,34 @@ impl<S> Transform<S> for PassThrough {
     fn reset(&mut self) {}
 }
 
-/// trait describing compound transforms
-/// TODO: make this useful
-trait MultiTransform {}
-
 /// Chain multiple transforms together
 pub struct Chain<S> {
     chain: Vec<Box<dyn Transform<S>>>,
 }
-
-impl<S> MultiTransform for Chain<S> {}
 
 impl<S> Chain<S> {
     pub fn new() -> Self {
         Self {chain: vec![]}
     }
 
+    /// convert a Transform into a Chain
     pub fn from(tf: impl Transform<S> + 'static) -> Self {
         Self {chain: vec![Box::new(tf)]}
     }
 
-    // 'static means tf is an owned type (not a ref),
-    // which is required for Box
-    pub fn push(mut self, tf: impl Transform<S> + 'static) -> Self {
+    /// add a Transform to the Chain
+    pub fn push<T>(mut self, tf: T) -> Self
+    where T: Transform<S> + 'static {
         self.chain.push(Box::new(tf));
         self
     }
 
+    /// get chain length
     pub fn len(&self) -> usize {
         self.chain.len()
     }
 
-    // get a reference to the nth chain element
+    /// get a reference to the nth chain element
     pub fn get(&self, n: usize) -> Option<&dyn Transform<S>> {
         match self.chain.get(n) {
             Some(tf_box) => Some(tf_box.as_ref()),
@@ -73,7 +75,7 @@ impl<S> Chain<S> {
         }
     }
 
-    // get a mutable reference to the nth chain element
+    /// get a mutable reference to the nth chain element
     pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn Transform<S>> {
         match self.chain.get_mut(n) {
             Some(tf_box) => Some(tf_box.as_mut()),
@@ -81,13 +83,18 @@ impl<S> Chain<S> {
         }
     }
 
-    // remove the nth chain element (panic if out of bounds)
+    /// remove the nth chain element (panic if out of bounds)
     pub fn remove(&mut self, n: usize) -> Option<Box<dyn Transform<S>>> {
         if n >= self.chain.len() {
             None
         } else {
             Some(self.chain.remove(n))
         }
+    }
+
+    /// Merge Chain `chain` into self.
+    pub fn append(&mut self, mut chain: Chain<S>) {
+        self.chain.append(&mut chain.chain);
     }
 }
 
@@ -101,7 +108,7 @@ macro_rules! chain {
     };
 }
 
-// Merge 2 Chains together into a single Chain
+/// Merge 2 Chains together into a single Chain
 impl<S> Add for Chain<S> {
     type Output = Chain<S>;
 
@@ -138,38 +145,34 @@ impl<S, T: Transform<S> + 'static + Send> ParallelTransform<S> for T {}
 pub trait ParallelTransform<S>: Transform<S> + 'static {}
 #[cfg(not(feature = "rayon"))]
 impl<S, T: Transform<S> + 'static> ParallelTransform<S> for T {}
-
-/* Chain transforms together in parallel
- * 
- * all transforms are weighted equally (for now)
- */
+/// Chain transforms together in parallel.
+/// All transforms are weighted equally (for now)
 pub struct ParallelChain<S> {
     chain: Vec<Box<dyn ParallelTransform<S>>>,
 }
-
-impl<S> MultiTransform for ParallelChain<S> {}
 
 impl<S> ParallelChain<S> {
     pub fn new() -> Self {
         Self {chain: vec![]}
     }
 
+    /// convert a Transform into a single-element Chain
     pub fn from(tf: impl ParallelTransform<S>) -> Self {
         Self { chain: vec![Box::new(tf)] }
     }
 
-    // 'static bound requires input [tf] to be an owned type,
-    // which all Transform implementations are
+    /// add a Transform to the chain
     pub fn push(mut self, tf: impl ParallelTransform<S>) -> Self {
         self.chain.push(Box::new(tf));
         self
     }
 
+    /// get chain length
     pub fn len(&self) -> usize {
         self.chain.len()
     }
 
-    // get a reference to the nth chain element
+    /// get a reference to the nth chain element
     pub fn get(&self, n: usize) -> Option<&dyn ParallelTransform<S>> {
         match self.chain.get(n) {
             Some(tf_box) => Some(tf_box.as_ref()),
@@ -177,7 +180,7 @@ impl<S> ParallelChain<S> {
         }
     }
 
-    // get a mutable reference to the nth chain element
+    /// get a mutable reference to the nth chain element
     pub fn get_mut(&mut self, n: usize) -> Option<&mut dyn ParallelTransform<S>> {
         match self.chain.get_mut(n) {
             Some(tf_box) => Some(tf_box.as_mut()),
@@ -185,7 +188,7 @@ impl<S> ParallelChain<S> {
         }
     }
 
-    // remove the nth chain element (panic if out of bounds)
+    /// remove the nth chain element (panic if out of bounds)
     pub fn remove(&mut self, n: usize) -> Option<Box<dyn ParallelTransform<S>>> {
         if n >= self.chain.len() {
             None
@@ -196,10 +199,9 @@ impl<S> ParallelChain<S> {
 }
 
 impl ParallelChain<Float> {
-    /* Create a wet/dry mix
-    *
-    * Internally, combine tf (+amp) with PassThrough (+amp)
-    */
+///  Create a wet/dry mix
+/// 
+/// Internally, combine tf (+amp) with PassThrough (+amp)
     pub fn wetdry(tf: impl ParallelTransform<Float>, wetness: Float) -> Self {
         assert!(wetness >= 0.0 && wetness <= 1.0, "wetness must be between 0 and 1");
         
@@ -208,11 +210,9 @@ impl ParallelChain<Float> {
         ParallelChain::from(wet).push(dry)
     }
 }
-
-/* Macro to chain together multiple transforms
- * 
- * parallel_chain(tf1, tf2, ...) -> ParallelChain::from(tf1).push(tf2).push(...)
- */
+/// Macro to chain together multiple transforms
+/// 
+/// parallel_chain(tf1, tf2, ...) -> ParallelChain::from(tf1).push(tf2).push(...)
 #[macro_export]
 macro_rules! parallel_chain {
     ( $tf0:expr, $( $tf:expr ),* ) => {
@@ -239,12 +239,9 @@ impl<S> Add for ParallelChain<S> {
 impl<S> Transform<S> for ParallelChain<S>
 where S: Copy+Zero+Send+Sync {
     fn transform(&mut self, buf: SampleBuffer<S>) -> SampleBuffer<S> {
-        // let chain = self.chain as Vec<Box<dyn Transform<S> + 'static + Send>>;
-        // data_final = final data vector (as float)
         let data_final_lock = Mutex::new(vec![S::zero(); buf.len()]);
 
         // run each transform, scale result, and add to data_final
-        // for tf_box in self.chain.iter_mut() {
         self.chain.par_iter_mut().for_each(|tf_box| {
             let buf_part = tf_box.transform(buf.clone());
             let mut data_final = data_final_lock.lock()
@@ -260,7 +257,6 @@ where S: Copy+Zero+Send+Sync {
     }
 
     fn reset(&mut self) {
-        // for tf_box in self.chain.par_iter_mut() {
         self.chain.par_iter_mut().for_each(|tf_box| {
             tf_box.reset();
         });
@@ -293,30 +289,27 @@ where S: Copy+Zero {
 
 // Gain: scale signal up or down.
 pub struct Gain {
-    // here, gain is a multiplier
-    gain: Float,
-    // stype: PhantomData<S>
+    gain: Float, // multiplier
 }
 
 #[allow(dead_code)]
-// impl<S> Gain<S>
-// where Float: AsPrimitive<S>, S: AsPrimitive<Float> {
 impl Gain {
     pub fn new(gain: Float) -> Self {
         Self { gain }
     }
     
-    // invert signal polarity
+    /// invert signal polarity
     pub fn inverter() -> Self {
         Self { gain: -1.0 }
     }
     
-    // dB change = 20 * log10(gain)
+    /// dB change = 20 * log10(gain)
     pub fn db(db: Float) -> Self {
         let gain = Self::db2gain(db);
         Self { gain }
     }
 
+    /// convert dB to gain multiplier
     fn db2gain(db: Float) -> Float {
         10.0.powf(db / 20.0)
     }
@@ -331,9 +324,8 @@ impl Transform<Float> for Gain {
     fn reset(&mut self) {}
 }
 
-/* Conv1d: Convolve signal with a kernel.
- * This can model any linear filter
- */
+/// Conv1d: Convolve signal with a kernel.
+/// This can model any FIR filter
 pub struct Conv1d {
     kernel: Vec<Float>,
     lastchunk: Vec<Float>
@@ -388,18 +380,16 @@ impl Conv1d {
         Self {kernel, lastchunk: vec![]}
     }
 
-    /*
-    Create digital butterworth filter,
-    using a bilinear transform,
-        W_cont = 2 * fs * tan(w_disc / 2)
-    then sampling the freq response,
-    then an IFFT.
-
-    n   digital filter kernel length
-    fc  cutoff freq (hz)
-    ord analog filter order
-    fs  sample rate (hz)
-    */
+    /// Create digital butterworth filter,
+    /// using a bilinear transform,
+    ///     W_cont = 2 * fs * tan(w_disc / 2)
+    /// then sampling the freq response,
+    /// then an IFFT.
+    /// 
+    /// n   digital filter kernel length
+    /// fc  cutoff freq (hz)
+    /// ord analog filter order
+    /// fs  sample rate (hz)
     pub fn butterworth(n: usize, fc: Float, ord: u32, fs: Float) -> Self {
         const OVERSAMPLE_FACTOR: usize = 15;
         let wc = hz2rads(fc); // cutoff freq in rad/s
@@ -628,29 +618,25 @@ impl DiffEq {
         }
     }
 
-    /* use add_vec at the beginning of transform()
-     * to make sure x/yvals length matches number of buffer channels
-     * this avoids having to hardcode channelct inside DiffEq object
-     * */
+    /// use add_ch at the beginning of transform()
+    /// to make sure x/yvals length matches number of buffer channels
+    /// this avoids having to hardcode channelct inside DiffEq object
     fn add_ch(&mut self) {
         self.xvals.push(VecDeque::from(vec![0.0; self.xcoeff.len()]));
         self.yvals.push(VecDeque::from(vec![0.0; self.ycoeff.len()]));
         self.chcount += 1;
     }
 
-    /* Merge two DiffEqs together in parallel
-     * 
-     * Instead of combining into a ParallelChain,
-     * Combine into one big DiffEq.
-     * 
-     * BORING MATH:
-     * Assume system 1 has Y(z) = a0..ak and X(z) = c0..cm
-     *    and system 2 has Y(z) = b0..bp and X(z) = d0..dq
-     * Then multiplying H1(z)*H2(z) gives:
-     *     [(a0..ak)(d0..dq) + (b0..bp)(c0..cm)] / [(c0..cm)(d0..dq)]
-     * Finally, multiplying/adding all of these polynomicals gives the diffeq
-     *   coeffs of the summed system
-     */
+    /// Parallel-Merge two DiffEqs together in parallel,
+    /// instead of using a ParallelChain.
+    /// 
+    /// BORING MATH:
+    /// Assume system 1 has Y(z) = a0..ak and X(z) = c0..cm
+    ///    and system 2 has Y(z) = b0..bp and X(z) = d0..dq
+    /// Then multiplying H1(z)*H2(z) gives:
+    ///     [(a0..ak)(d0..dq) + (b0..bp)(c0..cm)] / [(c0..cm)(d0..dq)]
+    /// Finally, multiplying/adding all of these polynomicals gives the diffeq
+    ///   coeffs of the summed system
     fn merge_parallel(self, rhs: Self) -> Self {
         let x1 = self.xcoeff;
         let y1 = self.ycoeff;
@@ -664,12 +650,12 @@ impl DiffEq {
         Self::new(xcoeff, ycoeff)
     }
 
-    /* Merge two DiffEqs together in series
-     * 
-     * Instead of combining into a Chain,
-     * Combine into one big DiffEq by multiplying the x and y polynomial
-     * coeffs between v1 and v2.
-     */
+    /// Parallel-Merge two DiffEqs together in parallel,
+    /// instead of using a Chain.
+    /// 
+    /// BORING MATH:
+    ///   Combine into one big DiffEq by multiplying the x and y polynomial
+    ///   coeffs between v1 and v2.
     fn merge_series(self, rhs: Self) -> Self {
         let x1 = self.xcoeff;
         let y1 = self.ycoeff;
@@ -681,12 +667,12 @@ impl DiffEq {
         Self::new(xcoeff, ycoeff)
     }
 
-    /* 1st order butterworth
-     *
-     *              W + W z^{-1}
-     * H(z) = ------------------------
-     *        (W + 1) + (W - 1) z^{-1}
-     */
+    /// 1st order butterworth
+    /// 
+    ///              W + W z^{-1}
+    /// H(z) = ------------------------
+    ///        (W + 1) + (W - 1) z^{-1}
+    /// 
     pub fn butterworth1(fc: Float, fs: Float) -> Self {
         let wc = hz2rads(fc);
         let w = (wc * 0.5 / fs).tan();
@@ -697,13 +683,11 @@ impl DiffEq {
         Self::new(numer, denom)
     }
 
-    /*
-     * 2nd order butterworth (UNSTABLE AND PROBABLY WRONG)
-     *
-     *                         W^2 + 2 W^2 z^{-1} w^2 + z^{-2}
-     * H(z) = ------------------------------------------------------------------
-     *        1 + W sqrt2 + W^2 + 2(W^2 - 1) z^{-1} + (W^2 - W sqrt2 + 1) z^{-2}
-     */
+    /// 2nd order butterworth (UNSTABLE AND PROBABLY WRONG)
+    /// 
+    ///                         W^2 + 2 W^2 z^{-1} w^2 + z^{-2}
+    /// H(z) = ------------------------------------------------------------------
+    ///        1 + W sqrt2 + W^2 + 2(W^2 - 1) z^{-1} + (W^2 - W sqrt2 + 1) z^{-2}
     pub fn butterworth2(fc: Float, fs: Float) -> Self {
         let wc = hz2rads(fc);
         let w = (wc * 0.5 / fs).tan();
@@ -716,28 +700,27 @@ impl DiffEq {
         Self::new(numer, denom)
     }
 
-    /* All pass filter (aka phase shifter)
-     * 
-     * BORING MATH:
-     * all-pass has a pole and zero pair reflected across the unit circle
-     * e.g. pole = r exp(jw), zero = 1/r exp(jw)
-     * 
-     * for a pole at a, zero at 1/a*:
-     *             1 - (1/a*) z^-1       -a* + z^-1
-     * H(z) = -a* _________________  =  ____________
-     *               1 - a z^-1          1 - a z^-1
-     * 
-     * to have real coefficients, combine (above) with another allpass with
-     * pole=a*, zero=1/a:
-     * 
-     *               a - b z^-1 + 1
-     * H_real(z) = ___________________
-     *              1 - b^-1 + a z^-2
-     * where a = |pole|^2, b = 2*Re[pole]
-     * 
-     * note: angle of pole = frequency of maximum phase-shift
-     *       magnitude of pole ~ sharpness of phase-shift
-     */
+    /// All pass filter (aka phase shifter)
+    /// 
+    /// BORING MATH:
+    /// all-pass has a pole and zero pair reflected across the unit circle
+    /// e.g. pole = r exp(jw), zero = 1/r exp(jw)
+    /// 
+    /// for a pole at a and a zero at 1/a*:
+    ///             1 - (1/a*) z^-1       -a* + z^-1
+    /// H(z) = -a* _________________  =  ____________
+    ///               1 - a z^-1          1 - a z^-1
+    /// 
+    /// to have real coefficients, combine (above) with another allpass with
+    /// pole=a*, zero=1/a:
+    /// 
+    ///               a - b z^-1 + 1
+    /// H_real(z) = ___________________
+    ///              1 - b^-1 + a z^-2
+    /// where a = |pole|^2, b = 2*Re[pole]
+    /// 
+    /// note: pole angle = frequency of maximum phase-shift,
+    ///       pole magnitude ~ sharpness of phase-shift
     fn allpass_complex(pole: CFloat) -> Self {
         let a = pole.norm_sqr(); // |pole|^2
         let b = -2.0 * pole.re;  // -2 Re[pole]
@@ -746,18 +729,17 @@ impl DiffEq {
         Self::new(numer, denom)
     }
 
-    // all-pass with a real-valued pole (r), and a zero at 1/r
+    /// all-pass with a real-valued pole (r), and a zero at 1/r
     fn allpass_real(pole: Float) -> Self {
         let numer = vec![-pole, 1.0];
         let denom = vec![1.0, -pole];
         Self::new(numer, denom)
     }
 
-    /* Create an all-pass by specifying phase angle and r-value
-     *
-     * phase = phase angle (rad) of pole
-     * r = pole magnitude
-     */
+    /// Create an all-pass by specifying phase angle and r-value
+    /// 
+    /// phase = phase angle (rad) of pole
+    /// r = pole magnitude
     pub fn allpass(phase: Float, r: Float) -> Self {
         let phase = phase.rem_euclid(TAU);
         if phase == 0.0 {
@@ -869,11 +851,12 @@ pub struct Pan {
 }
 
 impl Pan {
-    /*
-     * Pan audio to the left.
-     * pan_amt=1 --> pan all the way left
-     * pan_amt=0 --> pan all the way right
-     */
+    /// Pan audio to the left.
+    /// 
+    /// pan_amt=1 --> pan all the way left
+    /// pan_amt=0 --> pan all the way right
+    /// 
+    /// Panic if pan_amt is not between 0 and 1.
     pub fn pan_left(pan_amt: Float) -> Self {
         assert!(pan_amt >= 0.0 && pan_amt <= 1.0, "pan amount must be between 0-1");
         Self {
@@ -882,17 +865,13 @@ impl Pan {
         }
     }
 
-    /*
-     * Same thing as pan_left, but pans in the other direction
-     */
+    /// Same as pan_left but in the other direction
     pub fn pan_right(pan_amt: Float) -> Self {
         Self::pan_left(1.0 - pan_amt)
     }
 
-    /*
-     * Swap left and right channels
-     */
-    pub fn invert() -> Self {
+    /// Swap left and right channels
+    pub fn inverter() -> Self {
         Self {
             left_wt: [0.0, 1.0],
             right_wt: [1.0, 0.0]
@@ -921,15 +900,13 @@ impl Transform<Float> for Pan {
     fn reset(&mut self) {}
 }
 
-/* Phaser: phase-shift and combine with dry signal
- * 
- * Internally, this is a ParallelChain of DiffEq and Passthrough
- */
+/// Apply multiple phase shifts with wet/dry control.
+/// 
+/// Internally, this is a Chain of evenly spaced all-pass filters,
+/// all contained in a wet/dry ParallelChain.
 pub struct Phaser {
     chain: ParallelChain<Float>
 }
-
-impl MultiTransform for Phaser {}
 
 impl Phaser {
     /* Construct a new phaser
@@ -963,6 +940,7 @@ impl Transform<Float> for Phaser {
     }
 }
 
+/// Downsample a signal by keeping 1 out of every n samples.
 pub struct Decimator {
     factor: u32,
     remainder: usize
@@ -1018,6 +996,7 @@ impl Transform<Float> for Decimator {
     }
 }
 
+/// Resample a signal using sinc interpolation.
 pub struct Resampler {
     fs: Float
 }
