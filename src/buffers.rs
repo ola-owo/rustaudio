@@ -386,7 +386,7 @@ where
  * S: data type of samples in wav file
  */
 #[derive(Clone)]
- pub struct SampleBuffer<S> {
+pub struct SampleBuffer<S> {
     data: Vec<S>,
     numch: ChannelCount,
     fs: SampleRate,

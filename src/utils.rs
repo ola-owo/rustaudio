@@ -31,16 +31,15 @@ fn chunk_summary(buf: &SampleBuffer<Float>) {
 }
 
 /// Root-mean-square average of a vector
-pub fn rms<T,R>(vec: &Vec<T>) -> R
+pub fn rms<T,R>(vals: &[T]) -> R
 where T:Num+AsPrimitive<R>, R:'static+num_traits::Float {
-    let e = energy(vec).as_();
+    let e = energy(vals).as_();
     e.sqrt()
 }
 
 /// Signal energy
-pub fn energy<T:Num+Copy>(vec: &Vec<T>) -> T {
-    vec
-        .iter()
+pub fn energy<T:Num+Copy>(vals: &[T]) -> T {
+    vals.iter()
         .fold(T::zero(), |acc, &x| acc + x*x)
 }
 
@@ -100,15 +99,12 @@ pub fn vec_mul<T>(v1: &Vec<T>, v2: &Vec<T>) -> Vec<T>
 where T: AddAssign + Mul<Output=T> + Zero + Copy {
     let mut x1: &T;
     let mut x2: &T;
-    let mut y: &mut T;
     let mut vout = vec![T::zero(); v1.len() + v2.len()];
     for i1 in 0..v1.len() {
-        x1 = v1.get(i1).unwrap();
+        x1 = &v1[i1];
         for i2 in 0..v2.len() {
-            x2 = v2.get(i2).unwrap();
-
-            y = vout.get_mut(i1+i2).unwrap();
-            *y += *x1 * *x2;
+            x2 = &v2[i2];
+            vout[i1+i2] += *x1 * *x2;
         }
     }
     vout
@@ -117,14 +113,16 @@ where T: AddAssign + Mul<Output=T> + Zero + Copy {
 /// Sinc interpolation
 ///
 /// BORING MATH:
-///   x(t) = sum_{n: -inf->inf} [x[n] * sinc((t - nT)/T)]
+///   x(t) = sum{n: -inf->inf}( x[n] * sinc((t - nT)/T) )
 /// substitute t=m*T2:
-///   x[m*T2] = sum_n{ x[n] * sinc((mT2 - nT) / T) }
-///          = sum_n{ x[n] * sinc(m(T2/T) - n) }
+///   x[m*T2] = sum{n}( x[n] * sinc((mT2 - nT) / T) )
+///           = sum{n}( x[n] * sinc(m(T2/T) - n) )
 pub fn interp_sinc<T>(v_in: &[T], n_out: usize) -> Vec<T>
-where T: 'static + num_traits::Float + AsPrimitive<f64>,
-for<'a> &'a T: Mul<T, Output=T>,
-f64: AsPrimitive<T> {
+where
+    T: 'static + num_traits::Float + AsPrimitive<f64>,
+    for<'a> &'a T: Mul<T, Output=T>,
+    f64: AsPrimitive<T>
+{
     let n_in = v_in.len();
     let t2_t1 = (n_in - 1) as f64 / (n_out - 1) as f64; // ratio of T2/T1
 
@@ -145,5 +143,91 @@ where T: 'static+num_traits::Float, f32: AsPrimitive<T> {
     } else {
         let pi_x = x * PI.as_();
         pi_x.sin() / pi_x
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn test_energy() {
+        let v = vec![-1.4, 0.0, 2.6, 4.5];
+        assert_eq!(energy(&Vec::<Float>::new()), 0.0);
+        assert_relative_eq!(energy(&v), 28.97);
+    }
+
+    #[test]
+    fn test_rms() {
+        let v = vec![-1.4, 0.0, 2.6, 4.5];
+        assert_eq!(rms::<_,Float>(&Vec::<Float>::new()), 0.0);
+        assert_relative_eq!(rms::<_,f64>(&v), 5.382378656319156_f64);
+    }
+
+    #[test]
+    fn test_deg2rad() {
+        assert_eq!(deg2rad(0.0), 0.0);
+        assert_eq!(deg2rad(90.0), 0.5 * PI);
+        assert_eq!(deg2rad(180.0), PI);
+        assert_eq!(deg2rad(-90.0), -0.5 * PI);
+    }
+
+    #[test]
+    fn test_rad2deg() {
+        assert_eq!(rad2deg(0.0), 0.0);
+        assert_eq!(rad2deg(0.5 * PI), 90.0);
+        assert_eq!(rad2deg(PI), 180.0);
+        assert_eq!(rad2deg(-0.5 * PI), -90.0);
+    }
+
+    #[test]
+    fn test_hz2rads() {
+        assert_eq!(hz2rads(0.0), 0.0);
+        assert_eq!(hz2rads(0.5), PI);
+        assert_eq!(hz2rads(1.0), 2.0 * PI);
+        assert_eq!(hz2rads(-1.0), -2.0 * PI);
+    }
+
+    #[test]
+    fn test_vec_scale() {
+        let v = vec![11.19, -9.23, -11.34, -4.72];
+        assert_relative_eq!(
+            vec_scale(&v[..], 2.0)[..],
+            vec![22.38, -18.46, -22.68, -9.44]);
+        assert_relative_eq!(
+            vec_scale(&v[..], -0.5)[..],
+            vec![-5.595, 4.615, 5.67, 2.36]);
+    }
+
+    #[test]
+    fn test_vec_scale_inplace() {
+        let v1 = vec![11.19, -9.23, -11.34, -4.72];
+        let mut v2 = v1.clone();
+        vec_scale_inplace(&mut v2[..], 2.0);
+        assert_relative_eq!(v2[..], vec![22.38, -18.46, -22.68, -9.44]);
+        vec_scale_inplace(&mut v2[..], 0.5);
+        assert_relative_eq!(v2[..], v1[..]);
+    }
+
+    #[test]
+    fn test_vec_add() {
+        let v1 = vec![-8.24, -6.36, 9.53, 4.39];
+        let v2 = vec![5.45, -6.68, 8.46, -11.54];
+        let v3 = vec![-8.39, 3.56, 16.68];
+        let v4 = vec![-7.17, -10.99, -2.48, -12.46, 0.17];
+
+        // same length
+        assert_relative_eq!(
+            vec_add(&v1, &v2)[..],
+            vec![-2.79, -13.04, 17.99, -7.15]);
+        // RHS is shorter
+        assert_relative_eq!(
+            vec_add(&v2, &v3)[..],
+            vec![-2.94, -3.12, 25.14, -11.54]);
+        // RHS is longer
+        assert_relative_eq!(
+            vec_add(&v2, &v4)[..],
+            vec![-1.72, -17.67, 5.98, -24.0, 0.17]);
     }
 }

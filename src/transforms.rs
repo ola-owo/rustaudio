@@ -627,17 +627,17 @@ impl DiffEq {
         self.chcount += 1;
     }
 
-    /// Parallel-Merge two DiffEqs together in parallel,
+    /// Merge two DiffEqs together in parallel,
     /// instead of using a ParallelChain.
     /// 
     /// BORING MATH:
-    /// Assume system 1 has Y(z) = a0..ak and X(z) = c0..cm
-    ///    and system 2 has Y(z) = b0..bp and X(z) = d0..dq
+    /// Assume system 1 has transfer coeffs Y(z): a0..ak and X(z): c0..cm
+    ///    and system 2 has Y(z): b0..bp and X(z): d0..dq
     /// Then multiplying H1(z)*H2(z) gives:
     ///     [(a0..ak)(d0..dq) + (b0..bp)(c0..cm)] / [(c0..cm)(d0..dq)]
     /// Finally, multiplying/adding all of these polynomicals gives the diffeq
     ///   coeffs of the summed system
-    fn merge_parallel(self, rhs: Self) -> Self {
+    pub fn merge_parallel(self, rhs: Self) -> Self {
         let x1 = self.xcoeff;
         let y1 = self.ycoeff;
         let x2 = rhs.xcoeff;
@@ -650,17 +650,17 @@ impl DiffEq {
         Self::new(xcoeff, ycoeff)
     }
 
-    /// Parallel-Merge two DiffEqs together in parallel,
+    /// Merge two DiffEqs together in series,
     /// instead of using a Chain.
     /// 
     /// BORING MATH:
-    ///   Combine into one big DiffEq by multiplying the x and y polynomial
-    ///   coeffs between v1 and v2.
-    fn merge_series(self, rhs: Self) -> Self {
+    /// Combine into one big DiffEq by multiplying the x and y polynomial
+    ///   coeffs between `self` and `other`.
+    pub fn merge_series(self, other: Self) -> Self {
         let x1 = self.xcoeff;
         let y1 = self.ycoeff;
-        let x2 = rhs.xcoeff;
-        let y2 = rhs.ycoeff;
+        let x2 = other.xcoeff;
+        let y2 = other.ycoeff;
 
         let xcoeff = vec_mul(&x1, &x2);
         let ycoeff = vec_mul(&y1, &y2);
@@ -1031,4 +1031,39 @@ impl Transform<Float> for Resampler {
     }
 
     fn reset(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{buffers::{ChannelCount, SampleBuffer, SampleRate}, utils::Float};
+    use hound::WavSpec;
+    use rand;
+    use std::sync::LazyLock;
+
+    const NUM_CH: ChannelCount = 2;
+    const FS: SampleRate = 48000;
+    const BUFF_LEN: usize = 1024;
+
+    static TEST_WAVSPEC: WavSpec = WavSpec {
+        channels: NUM_CH,
+        sample_rate: FS,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Float
+    };
+    static TEST_BUFFER: LazyLock<SampleBuffer<Float>> = LazyLock::new(|| {
+        // let mut rng = rand::rng();
+        let mut data = vec![0.0; BUFF_LEN];
+        rand::fill(data.as_mut_slice());
+        SampleBuffer::new(data, &TEST_WAVSPEC)
+    });
+
+    #[test]
+    fn test_passthrough() {
+        let mut tf = PassThrough;
+        assert_eq!(
+            TEST_BUFFER.data(),
+            tf.transform(TEST_BUFFER.clone()).data()
+        );
+    }
 }
