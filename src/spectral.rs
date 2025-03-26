@@ -48,7 +48,7 @@ where
             self.fft.monitor(&buf);
             let n_pts = buf.dim().1;
             fftout = self.fft.pop_output();
-            self.data.slice_mut(s![.., t, ..])
+            self.data.slice_mut(s![.., t, ..n_pts])
                 .assign(&fftout.slice(s![.., ..n_pts]));
         }
 
