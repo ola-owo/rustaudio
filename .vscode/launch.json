@@ -49,6 +49,27 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "Test example 'spectrogram'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example",
+                    "spectrogram"
+                ],
+                "filter": {
+                    "name": "spectrogram",
+                    "kind": "example"
+                }
+            },
+            "args": [
+                "data/moon.wav",
+                "/tmp/spectro.png"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "Debug unit tests in executable 'audio'",
             "cargo": {
                 "args": [
