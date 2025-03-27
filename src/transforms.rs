@@ -1038,11 +1038,13 @@ impl Transform<Float> for Resampler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{buffers::{ChannelCount, SampleBuffer, SampleRate}, utils::Float};
+    use std::sync::LazyLock;
     use hound::WavSpec;
     use rand;
-    use std::sync::LazyLock;
+    use approx::relative_eq;
+    use crate::utils::Float;
+    use crate::buffers::{ChannelCount, SampleBuffer, SampleRate};
+    use super::*;
 
     const NUM_CH: ChannelCount = 2;
     const FS: SampleRate = 48000;
@@ -1054,12 +1056,24 @@ mod tests {
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Float
     };
+
+    // buffer filled with random numbers
+    // TODO: should this have a fixed seed?
     static TEST_BUFFER: LazyLock<SampleBuffer<Float>> = LazyLock::new(|| {
-        // let mut rng = rand::rng();
         let mut data = vec![0.0; BUFF_LEN];
         rand::fill(data.as_mut_slice());
         SampleBuffer::new(data, &TEST_WAVSPEC)
     });
+    // delta function
+    static TEST_BUFFER_DELTA: LazyLock<SampleBuffer<Float>> = LazyLock::new(|| {
+        let mut data = vec![0.0; BUFF_LEN];
+        data[0] = 1.0;
+        SampleBuffer::new(data, &TEST_WAVSPEC)
+    });
+    // all zeros
+    static TEST_BUFFER_ZEROS: LazyLock<SampleBuffer<Float>> = LazyLock::new(||
+        SampleBuffer::new(vec![0.0; BUFF_LEN], &TEST_WAVSPEC)
+    );
 
     #[test]
     fn test_passthrough() {
@@ -1069,4 +1083,85 @@ mod tests {
             tf.transform(TEST_BUFFER.clone()).data()
         );
     }
+
+    #[test]
+    fn test_gain() {
+        let buf = Gain::new(2.0).transform(TEST_BUFFER.clone());
+        assert!(
+            buf.data().iter()
+            .zip(TEST_BUFFER.data().iter())
+            .all(|(&a,&b)| relative_eq!(0.5*a, b))
+        )
+    }
+
+    #[test]
+    fn test_gain_zero() {
+        // test X * 0 = 0
+        let buf = Gain::new(0.0).transform(TEST_BUFFER.clone());
+        assert!(
+            buf.data().iter()
+            .all(|&s| relative_eq!(s, 0.0))
+        );
+
+        // test X + (-X) = 0
+        let buf = Gain::inverter().transform(TEST_BUFFER.clone());
+        assert!(
+            buf.data().iter()
+            .zip(TEST_BUFFER.data().iter())
+            .all(|(a,b)| relative_eq!(a + b, 0.0))
+        );
+    }
+
+    #[test]
+    fn test_conv1d_impulse_resp() {
+        let mut kernel = vec![0.0; 100];
+        rand::fill(kernel.as_mut_slice());
+        let mut conv = Conv1d::new(kernel);
+        let buf = conv.transform(TEST_BUFFER_DELTA.clone());
+        assert_eq!(
+            buf.data().iter().sum::<Float>(),
+            conv.kernel.iter().sum()
+        );
+    }
+
+    #[test]
+    fn test_pan() {
+        // pan left
+        let mut panl = Pan::pan_left(1.0);
+        let buf = panl.transform(TEST_BUFFER.clone());
+        assert!(
+            buf.data().iter()
+            .skip(1).step_by(2)
+            .all(|&s| s == 0.0)
+        );
+
+        // pan right
+        let mut panr = Pan::pan_right(1.0);
+        let buf = panr.transform(TEST_BUFFER.clone());
+        assert!(
+            buf.data().iter()
+            .step_by(2)
+            .all(|&s| s == 0.0)
+        );
+
+        // pan invert
+        let mut inv = Pan::inverter();
+        let buf = inv.transform(TEST_BUFFER.clone());
+        assert!(
+            buf.data().chunks_exact(2)
+            .zip(TEST_BUFFER.data().chunks_exact(2))
+            .all(|(d1,d2)| d1[0] == d2[1] && d1[1] == d2[0])
+        );
+    }
+
+    #[test]
+    fn test_mono() {
+        let mut mono = ToMono;
+        let buf = mono.transform(TEST_BUFFER.clone());
+        assert!(
+            buf.data().chunks_exact(NUM_CH as usize)
+            .all(|chunk| chunk.iter().all(|&s| s == chunk[0]))
+        )
+    }
+
 }
