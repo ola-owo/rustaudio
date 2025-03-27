@@ -853,8 +853,7 @@ pub struct Pan {
 impl Pan {
     /// Pan audio to the left.
     /// 
-    /// pan_amt=1 --> pan all the way left
-    /// pan_amt=0 --> pan all the way right
+    /// `pan_amt` ranges from 0 (no change) to 1 (all the way left)
     /// 
     /// Panic if pan_amt is not between 0 and 1.
     pub fn pan_left(pan_amt: Float) -> Self {
@@ -865,9 +864,13 @@ impl Pan {
         }
     }
 
-    /// Same as pan_left but in the other direction
+    /// Same as pan_left but in the other direction.
     pub fn pan_right(pan_amt: Float) -> Self {
-        Self::pan_left(1.0 - pan_amt)
+        assert!(pan_amt >= 0.0 && pan_amt <= 1.0, "pan amount must be between 0-1");
+        Self {
+            left_wt: [1.0 - pan_amt, 0.0],
+            right_wt: [pan_amt, 1.0]
+        }
     }
 
     /// Swap left and right channels
